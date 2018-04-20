@@ -1,0 +1,142 @@
+import os
+import sys
+import key
+import math
+import numpy as np
+import optparse
+import tempfile
+import time
+import StringIO
+from casac import casac
+
+os.environ['TZ'] = 'UTC'
+time.tzset()
+
+columnnames = [
+    "BANDNAME",
+    "BFREQ",
+    "EFREQ",
+    "BTIME",
+    "ETIME",
+    "ANTENNA",
+    "GAIN"
+]
+
+datatypes = [
+    "A",
+    "D",
+    "D",
+    "D",
+    "D",
+    "A",
+    "R4,2"
+]
+
+def transform_poly(coeff, min_elev=0, max_elev=90):
+    f = np.poly1d(coeff[::-1])
+    g = lambda x: np.sqrt(f(90 - x))
+    x = np.linspace(min_elev, max_elev, 64, endpoint=True)
+    y = g(x)
+    return np.poly1d(np.polyfit(x, y, 3))
+
+def skip_values(infp):
+    for line in infp:
+        if line.startswith('!'):
+            continue
+        if line.strip().endswith('/'):
+            break
+        continue
+    return
+
+keys = StringIO.StringIO()
+section = 0
+
+tb = casac.table()
+
+i = sys.argv.index("-c")
+
+usage = "usage %prog [options] antabfile gcfile"
+parser = optparse.OptionParser(usage=usage)
+parser.add_option("-l", "--min-elevation", type="float", dest="min",
+                  help="minimum elevation", default=0)
+parser.add_option("-u", "--max-elevation", type="float", dest="max",
+                  help="maximum elevation", default=90)
+(options, args) = parser.parse_args(sys.argv[i+2:])
+if len(args) != 2:
+    parser.error("incorrect number of arguments")
+
+antab = args[0]
+gc = args[1]
+
+tb = casac.table()
+
+outfp = tempfile.NamedTemporaryFile('w')
+
+t = time.strptime("2000y01d00h00m00s", "%Yy%jd%Hh%Mm%Ss")
+btime = time.mktime(t) + 40587.0 * 86400
+t = time.strptime("2100y01d00h00m00s", "%Yy%jd%Hh%Mm%Ss")
+etime = time.mktime(t) + 40587.0 * 86400
+
+fp = open(antab, 'r')
+for line in fp:
+    if line.startswith('!'):
+        continue
+    keys.write(line)
+    if line.strip().endswith('/'):
+        keys.seek(0)
+        gain = key.read_keyfile(keys)
+        if gain and gain[0] and gain[0][0][0] == 'GAIN':
+            antenna = gain[0][1][0]
+            gain = dict(gain[0])
+            try:
+                bfreq = gain['FREQ'][0] * 1e6
+            except:
+                bfreq = 0
+                pass
+            try:
+                efreq = gain['FREQ'][1] * 1e6
+            except:
+                efreq = 1e12
+                pass
+            print >> outfp, "C", bfreq, efreq,
+            print >> outfp, btime, etime,
+            print >> outfp, antenna,
+            dpfu = {}
+            try:
+                dpfu['R'] = gain['DPFU'][0]
+                dpfu['L'] = gain['DPFU'][1]
+            except:
+                dpfu['R'] = dpfu['L'] = gain['DPFU']
+                pass
+            try:
+                value = gain['POLY'][0]
+            except:
+                gain['POLY'] = [gain['POLY']]
+                pass
+            poly = transform_poly(gain['POLY'], options.min, options.max)
+            for pol in ['R', 'L']:
+                for i in xrange(4):
+                    try:
+                        value = poly[i] * math.sqrt(dpfu[pol])
+                    except:
+                        value = 0.0
+                        pass
+                    print >> outfp, value,
+                    continue
+                continue
+            print >> outfp
+            pass
+        elif gain and gain[0] and gain[0][0][0] == 'TSYS':
+            skip_values(fp)
+            pass
+        keys = StringIO.StringIO()
+        continue
+    continue
+
+outfp.flush()
+
+tb.fromascii(gc, asciifile=outfp.name, sep=' ',
+             columnnames=columnnames, datatypes=datatypes)
+
+outfp.close()
+fp.close()
