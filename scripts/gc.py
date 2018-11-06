@@ -1,13 +1,35 @@
-import os
-import sys
-import key
+# Copyright (C) 2016
+# Joint Institute for VLBI ERIC, Dwingeloo, The Netherlands
+#
+# This library is free software; you can redistribute it and/or modify it
+# under the terms of the GNU Library General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This library is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Library General Public
+# License for more details.
+#
+# You should have received a copy of the GNU Library General Public License
+# along with this library; if not, write to the Free Software Foundation,
+# Inc., 675 Massachusetts Ave, Cambridge, MA 02139, USA.
+#
+import inspect
 import math
-import numpy as np
+import os
 import optparse
+import StringIO
+import sys
 import tempfile
 import time
-import StringIO
+
+import numpy as np
 from casac import casac
+
+filename = inspect.getframeinfo(inspect.currentframe()).filename
+sys.path.append(os.path.dirname(os.path.realpath(filename)))
+import key
 
 os.environ['TZ'] = 'UTC'
 time.tzset()
@@ -82,11 +104,6 @@ def find_antenna(keys, ignore):
         return key[0]
     return None
 
-keys = StringIO.StringIO()
-section = 0
-
-tb = casac.table()
-
 i = sys.argv.index("-c")
 
 usage = "usage %prog [options] antabfile gcfile"
@@ -141,6 +158,7 @@ def gain_common(gain, antenna, band, bfreq, efreq, btime, etime, outfp):
     print >> outfp
     return
 
+keys = StringIO.StringIO()
 fp = open(antab, 'r')
 for line in fp:
     if line.startswith('!'):
