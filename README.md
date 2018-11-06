@@ -35,6 +35,9 @@ We assume that data are in a Measurement Set (MS) format. Steps in italic will b
 
 
 
+## Class Diagram
+
+You can find an UML Class Diagram of the project in *diagra-uml.dia* created with the [Gnome Dia](https://wiki.gnome.org/Apps/Dia) program.
 
 
 
