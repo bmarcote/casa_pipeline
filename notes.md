@@ -16,7 +16,7 @@
 - Runs the RFI flagging algorithm on the target data;
 - Calculates data weights based on the inverse square RMS noise of the MS;
 - Creates diagnostic images of calibrators.
- 
+
 
 ### Flow chart (VLA CASA pipeline)
 
@@ -126,4 +126,32 @@ inputs, msinfo = run_pipeline(inputs_path=<input file>)
 
 
 in plotms:  overwrite=True, showgui=False,...
+
+
+
+# Comments on py code
+
+
+
+USE NAMEDTUPLE INSTEAD OF A DICT, that allows a *dict.value* syntax
+Class = namedtuple('Data', 'msfile values some_thing ...')
+tt = Class('temp.ms', vis, ...)
+print(tt)
+print(tt.msfile)
+
+
+# @note
+# @attention
+# @bug
+# @warning
+
+
+
+
+
+
+
+
+
+
 
