@@ -31,6 +31,7 @@ We assume that data are in a Measurement Set (MS) format. Steps in italic will b
 - Produce final uvdata files.
 - Produce final plots.
 
+The configuration file (`config.inp`) will allow the users to overwrite any parameter used in any of the CASA tasks. The pipeline will thus be completely flexible in terms of calibration steps.
 
 
 ## Class Diagram
