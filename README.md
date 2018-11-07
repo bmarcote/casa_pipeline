@@ -10,8 +10,6 @@ The Pipeline will be executed by loading a input file that will contain all the 
 
 
 
-
-
 ## Pipeline Workflow
 
 This is the current workflow of the EVN CASA Pipeline and all steps that will do.
@@ -38,6 +36,25 @@ We assume that data are in a Measurement Set (MS) format. Steps in italic will b
 ## Class Diagram
 
 You can find an UML Class Diagram of the project in *diagra-uml.dia* created with the [Gnome Dia](https://wiki.gnome.org/Apps/Dia) program.
+
+
+
+## File structure during pipeline execution
+
+When running the EVN CASA Pipeline several files will be read and other ones will be created.
+
+
+The basic files required to run the pipeline will be:
+- *config.inp*: input file containing all commands to run the pipeline.
+- *MS dataset*: (specified in the `config.inp`) MS file with the raw EVN data.
+
+The pipeline will create several files and directories (under the output directory specified in `config.inp`):
+
+- calibration_tables/: directory where all calibration tables will lie.
+- cycle_n/: (with n=0,1,2,..) directories where output from the different calibration cycles will be stored.
+
+
+
 
 
 
