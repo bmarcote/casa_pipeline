@@ -39,6 +39,12 @@ The configuration file (`config.inp`) will allow the users to overwrite any para
 You can find an UML Class Diagram of the project in *diagram-uml.dia* created with the [Gnome Dia](https://wiki.gnome.org/Apps/Dia) program. A workflow of the pipeline steps can also be found in *diagram-workflow.dia*.
 
 
+![UML Class Diagram](diagram-uml.png)
+
+
+![Workflow Diagram](diagram-workflow.png)
+
+
 
 ## File structure during pipeline execution
 
