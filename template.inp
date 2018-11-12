@@ -49,6 +49,8 @@ target = None
 # not phase referencing.
 #solint = 0
 
+# If you have an external uvflg table (CASA format), apply it to the data (provide path)
+apply_flagtable = None
 do_aoflagger = False
 do_fringe_instrumental = True
 
