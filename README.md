@@ -34,15 +34,19 @@ We assume that data are in a Measurement Set (MS) format. Steps in italic will b
 The configuration file (`config.inp`) will allow the users to overwrite any parameter used in any of the CASA tasks. The pipeline will thus be completely flexible in terms of calibration steps.
 
 
+A workflow of the pipeline steps can also be found in *diagram-workflow.dia* (created with the [Gnome Dia](https://wiki.gnome.org/Apps/Dia) program).
+
+![Workflow Diagram](diagram-workflow.png)
+
+
+
 ## Class Diagram
 
-You can find an UML Class Diagram of the project in *diagram-uml.dia* created with the [Gnome Dia](https://wiki.gnome.org/Apps/Dia) program. A workflow of the pipeline steps can also be found in *diagram-workflow.dia*.
-
+You can find an UML Class Diagram of the project in *diagram-uml.dia* created with the [Gnome Dia](https://wiki.gnome.org/Apps/Dia) program.
 
 ![UML Class Diagram](diagram-uml.png)
 
 
-![Workflow Diagram](diagram-workflow.png)
 
 
 
