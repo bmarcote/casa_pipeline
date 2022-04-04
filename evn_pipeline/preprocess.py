@@ -47,7 +47,7 @@ def importfitsidi2ms(project: Project):
     """Converts the existing IDI-FITS files into a MS file.
     """
     if project.msfile.exists():
-        print("The MS file associated to {project.project_name} already exists. Will not be replaced.")
+        print(f"The MS file associated to {project.project_name} already exists. Will not be replaced.")
     else:
         casatasks.importfitsidi(fitsidifile=project.idi_files, vis=str(project.msfile), constobsid=True,
                                 scanreindexgap_s=8.0, specframe='GEO')

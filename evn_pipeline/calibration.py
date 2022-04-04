@@ -1,12 +1,10 @@
-import os
 import shutil
 from pathlib import Path
-from astropy.io import fits
 import casatasks
 import casatools
 from casatasks.private import tec_maps
-from . import casavlbitools
 from . import project
+from .project import SourceType
 
 
 def write_callib(filename, entry):
@@ -57,13 +55,19 @@ def a_priori_calibration(project: project.Project):
     calgc = project.caldir/f"{project.project_name.lower()}.gc"
     gcfile = project.caldir/"EVN.gc"
     remove_if_exists(caltsys)
-    casatasks.gencal(vis=str(project.msfile), caltable=str(caltsys), caltype='tsys', uniform=False)
-    remove_if_exists(calgc)
-    casatasks.gencal(vis=str(project.msfile), caltable=str(calgc), caltype='gc', infile=str(gcfile))
-    write_callib(filename=str(project.caldir/"cal_library.txt"),
-                 entry=f"caltable='{caltsys}' tinterp='nearest'")
-    write_callib(filename=str(project.caldir/"cal_library.txt"),
-                 entry=f"caltable='{calgc}' tinterp='nearest' finterp='nearest'")
+    if not caltsys.exists():
+        casatasks.gencal(vis=str(project.msfile), caltable=str(caltsys), caltype='tsys', uniform=False)
+        write_callib(filename=str(project.caldir/"cal_library.txt"),
+                     entry=f"caltable='{caltsys}' tinterp='nearest'")
+    else:
+        print(f"{caltsys} (Tsys corrections) already exists. It will not be generated again.")
+
+    if not calgc.exists():
+        casatasks.gencal(vis=str(project.msfile), caltable=str(calgc), caltype='gc', infile=str(gcfile))
+        write_callib(filename=str(project.caldir/"cal_library.txt"),
+                     entry=f"caltable='{calgc}' tinterp='nearest' finterp='nearest'")
+    else:
+        print(f"{calgc} (Gain Curve corrections) already exists. It will not be generated again.")
 
 
 def ionospheric_corrections(project: project.Project):
@@ -71,13 +75,17 @@ def ionospheric_corrections(project: project.Project):
     """
     # remove_if_exists(project.caldir/f"cal-iono.IGS_TEC.im")
     # remove_if_exists(project.caldir/f"cal-iono.IGS_RMS_TEC.im")
+    return
     caltec = project.caldir / f"{project.project_name.lower()}.tec"
     imtec  = project.caldir / f"{project.project_name.lower()}"
-    remove_if_exists(caltec)
-    tec_maps.create(vis=str(project.msfile), doplot=False, imname=str(imtec))
-    casatasks.gencal(vis=str(project.msfile), caltable=str(caltec),
-                     infile=f"{imtec}.IGS_TEC.im", caltype='tecim')
-    write_callib(filename=str(project.caldir / "cal_library.txt"), entry=f"caltable='{caltec}'")
+    if not caltec.exists():
+        tec_maps.create(vis=str(project.msfile), doplot=False, imname=str(imtec))
+        casatasks.gencal(vis=str(project.msfile), caltable=str(caltec),
+                         infile=f"{imtec}.IGS_TEC.im", caltype='tecim')
+        write_callib(filename=str(project.caldir / "cal_library.txt"), entry=f"caltable='{caltec}'")
+    else:
+        print(f"{caltec} (ionospheric corrections) already exists. It will not be generated again.")
+
 
 
 def main_calibration(project: project.Project):
@@ -89,28 +97,34 @@ def main_calibration(project: project.Project):
     cals = {'sbd': (project.caldir/f"{project.project_name.lower()}.sbd"),
             'mbd': (project.caldir/f"{project.project_name.lower()}.mbd"),
             'bp': (project.caldir/f"{project.project_name.lower()}.bp")}
+    do_all_exists = []
     for a_cal in cals:
-        remove_if_exists(cals[a_cal])
+        do_all_exists.append(cals[a_cal].exists())
 
-    casatasks.fringefit(vis=str(project.msfile), caltable=str(cals['sbd']),
-                        timerange=project.instr_delay_timerange, solint='inf', zerorates=True,
-                        refant=','.join(project.refants), minsnr=50, docallib=True,
-                        callib=str(project.caldir/"cal_library.txt"), parang=True)
-    write_callib(filename=str(project.caldir/"cal_library.txt"),
-                 entry=f"caltable='{cals['sbd']}' tinterp='nearest'")
-    casatasks.fringefit(vis=str(project.msfile), caltable=str(cals['mbd']),
-                        field=','.join(project.calibrators), solint='inf', zerorates=False,
-                        refant=','.join(project.refants), combine='spw', minsnr=5, docallib=True,
-                        callib=str(project.caldir/"cal_library.txt"), parang=True)
-    spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd']))
-    write_callib(filename=str(project.caldir/"cal_library.txt"),
-                 entry=f"caltable='{cals['mbd']}' tinterp='linear' spwmap={project.nsubbands}*[{spw_with_solutions}]")
-    casatasks.bandpass(vis=str(project.msfile), field=','.join(project.bandpass_calibrators), combine='scan',
-                       caltable=str(cals['bp']), docallib=True, callib=str(project.caldir/"cal_library.txt"),
-                       solnorm=True, solint='inf', refant=','.join(project.refants), bandtype='B',
-                       parang=True, fillgaps=16)
-    write_callib(filename=str(project.caldir/"cal_library.txt"),
-                 entry=f"caltable='{cals['bp']}' tinterp='linear' finterp='linear'")
+    if not all(do_all_exists):
+        casatasks.fringefit(vis=str(project.msfile), caltable=str(cals['sbd']),
+                            timerange=project.instr_delay_timerange, solint='inf', zerorates=True,
+                            refant=','.join(project.refants), minsnr=50, docallib=True,
+                            callib=str(project.caldir/"cal_library.txt"), parang=True)
+        write_callib(filename=str(project.caldir/"cal_library.txt"),
+                     entry=f"caltable='{cals['sbd']}' tinterp='nearest'")
+        casatasks.fringefit(vis=str(project.msfile), caltable=str(cals['mbd']),
+                            field=','.join(project.calibrators), solint='inf', zerorates=False,
+                            refant=','.join(project.refants), combine='spw', minsnr=5, docallib=True,
+                            callib=str(project.caldir/"cal_library.txt"), parang=True)
+        spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd']))
+        write_callib(filename=str(project.caldir/"cal_library.txt"),
+                     entry=f"caltable='{cals['mbd']}' tinterp='linear' " \
+                           f"spwmap={project.nsubbands}*[{spw_with_solutions}]")
+        casatasks.bandpass(vis=str(project.msfile), field=','.join(project.bandpass_calibrators), combine='scan',
+                           caltable=str(cals['bp']), docallib=True, callib=str(project.caldir/"cal_library.txt"),
+                           solnorm=True, solint='inf', refant=','.join(project.refants), bandtype='B',
+                           parang=True, fillgaps=16)
+        write_callib(filename=str(project.caldir/"cal_library.txt"),
+                     entry=f"caltable='{cals['bp']}' tinterp='linear' finterp='linear'")
+    else:
+        print(f"The tables related to the main calibration already exists. They will not be generated again.")
+
 
 
 def recalibration(project: project.Project):
@@ -121,22 +135,26 @@ def recalibration(project: project.Project):
     cals = {'sbd': (project.caldir/f"{project.project_name.lower()}.sbd2"),
             'mbd': (project.caldir/f"{project.project_name.lower()}.mbd2"),
             'bp': (project.caldir/f"{project.project_name.lower()}.bp2")}
-    for a_cal in cals:
-        remove_if_exists(cals[a_cal])
 
-    casatasks.fringefit(vis=str(project.msfile), caltable=str(cals['sbd']),
-                        timerange=project.instr_delay_timerange, solint='inf', zerorates=True,
-                        refant=','.join(project.refants), minsnr=50, docallib=True,
-                        callib=str(project.caldir/"cal_library.txt"), parang=True)
-    write_callib(filename=str(project.caldir/"cal_library.txt"),
-                 entry=f"caltable='{cals['sbd']}' tinterp='nearest'")
-    casatasks.fringefit(vis=str(project.msfile), caltable=str(cals['mbd']), # gaintype='T',  # combine pols
-                        field=','.join(project.calibrators), solint='inf', zerorates=False,
-                        refant=','.join(project.refants), combine='spw', minsnr=5, docallib=True,
-                        callib=str(project.caldir/"cal_library.txt"), parang=True)
-    spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd']))
-    write_callib(filename=str(project.caldir/"cal_library.txt"),
-                 entry=f"caltable='{cals['mbd']}' tinterp='linear' spwmap={project.nsubbands}*[{spw_with_solutions}]")
+    do_all_exists = []
+    for a_cal in cals:
+        do_all_exists.append(cals[a_cal].exists())
+
+    if not all(do_all_exists):
+        casatasks.fringefit(vis=str(project.msfile), caltable=str(cals['sbd']),
+                            timerange=project.instr_delay_timerange, solint='inf', zerorates=True,
+                            refant=','.join(project.refants), minsnr=50, docallib=True,
+                            callib=str(project.caldir/"cal_library.txt"), parang=True)
+        write_callib(filename=str(project.caldir/"cal_library.txt"),
+                     entry=f"caltable='{cals['sbd']}' tinterp='nearest'")
+        casatasks.fringefit(vis=str(project.msfile), caltable=str(cals['mbd']), # gaintype='T',  # combine pols
+                            field=','.join(project.calibrators), solint='inf', zerorates=False,
+                            refant=','.join(project.refants), combine='spw', minsnr=5, docallib=True,
+                            callib=str(project.caldir/"cal_library.txt"), parang=True)
+        spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd']))
+        write_callib(filename=str(project.caldir/"cal_library.txt"),
+                     entry=f"caltable='{cals['mbd']}' tinterp='linear' " \
+                           f"spwmap={project.nsubbands}*[{spw_with_solutions}]")
 
 
 def apply_calibration(project: project.Project):
@@ -150,7 +168,7 @@ def split(project: project.Project):
     """Splits all the data from all calibrated sources.
     """
     for a_source in project.sources:
-        if project.sources[a_source].type != project.SourceType.other:
+        if project.sources[a_source].type != SourceType.other:
             casatasks.split(vis=str(project.msfile), outputvis=str(project.msfile).replace(".ms", f".{a_source}.ms"),
                             field=a_source, datacolumn='corrected', width=project.nchannels)
 
@@ -160,7 +178,7 @@ def export_uvfits(project: project.Project):
     """Export the available SPLIT files into a UVFITS file.
     """
     for a_source in project.sources:
-        if project.sources[a_source].type != project.SourceType.other:
+        if project.sources[a_source].type != SourceType.other:
             casatasks.exportuvfits(vis=str(project.msfile).replace(".ms", f".{a_source}.ms"),
                                    fitsfile=str(project.msfile).replace(".ms", f".{a_source}.uvfits"),
                                    multisource=False, combinespw=True, padwithflags=True)

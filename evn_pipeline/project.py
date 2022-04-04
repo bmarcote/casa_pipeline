@@ -64,8 +64,12 @@ class Project(object):
 
     def is_source_in_project(self, a_source: str) -> bool:
         """Checks that the given source has been observed in this project (e.g. is in the MS source list).
+        Note that if the MS has not been created yet, it will return True (WEAKNESS!)
         """
-        return a_source in self.sources
+        if not self.msfile.exists():
+            return True
+        else:
+            return a_source in self.sources
 
     @property
     def targets(self) -> list:

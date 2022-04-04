@@ -9,6 +9,7 @@ from . import project
 def apply_apriori_flagging(project: project.Project):
     """Applies the flags stored in the file associated with the project.
     """
+    return
     casatasks.flagdata(vis=str(project.msfile), inpfile=str(project.caldir/f"{project.project_name}.flag"),
                        reason='any', action='apply', flagbackup=False, savepars=False)
     casatasks.flagmanager(vis=str(project.msfile), mode='save', versionname='apriori_flags',
