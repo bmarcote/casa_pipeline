@@ -13,6 +13,7 @@ import numpy as np
 from pathlib import Path
 from dataclasses import dataclass
 from collections import defaultdict
+from natsort import natsort_keygen
 from pyrap import tables as pt
 import casatasks
 from enum import Enum
@@ -27,6 +28,8 @@ from . import imaging
 
 
 def chunkert(f, l, cs):
+    """Silly function to select a subset of an interval (f, f+cs) : 0 < f < l.
+    """
     while f<l:
         n = min(cs, l-f)
         yield (f, n)
@@ -270,10 +273,10 @@ class Antennas(object):
         return key in self.names
 
     def __str__(self):
-        return f"Antennas([{', '.join(self.names)}])"
+        return f"Antennas([{', '.join([ant if (ant in self.observed) else '['+ant+']' for ant in self.names])}])"
 
     def __repr__(self):
-        return f"Antennas([{', '.join(self.names)}])"
+        return f"Antennas([{', '.join([ant if ant in self.observed else '['+ant+']' for ant in self.names])}])"
 
     def json(self):
         """Returns a dict with all attributes of the object.
@@ -377,7 +380,7 @@ class FreqSetup(object):
         return self.__repr__()
 
     def __repr__(self):
-        return f"{self.frequency} central frequency.\n{self.n_subbands} x {self.bandwidth_spw} " \
+        return f"{self.frequency} central frequency.\n{self.n_subbands} x {self.bandwidth_per_subband} " \
                f"subbands. {self.channels} channels per subband."
 
     def json(self):
@@ -414,8 +417,10 @@ class Project(object):
         """
         return self._obsdate
 
-    @obsdate.setter
+    @epoch.setter
     def epoch(self, obsdate: dt.date):
+        assert isinstance(obsdate, dt.date), "obsdate needs to be of datetime.date type " \
+                                             f"(currently {obsdate} is {type(obsdate)})."
         self._obsdate = obsdate
 
     @property
@@ -767,17 +772,24 @@ class Ms(Project):
     def import_lba_fits(self, fitsfile: str):
         raise NotImplementedError
 
-    def import_evn_fitsidi(self, fitsidifiles: list):
+    def import_evn_fitsidi(self, fitsidifiles):
         """Imports the provided FITS-IDI files from an EVN observation into a single MS file.
         If checks if the FITS-IDI files already contain the Tsys and GC tables. Otherwise, it
         will first append such information and then import the files.
 
         Inputs
-            fitsidifiles : list
-                This must be an ordered list of all FITS-IDI files that will be imported.
+            fitsidifiles : list or str
+                If str, it will retrieve all files that match the given path/name.
+                If list, it must be an ordered list of all FITS-IDI files that will be imported.
         """
         # First run the Tsys and GC appending to the FITS-IDI. These functions will do nothing
         # if the information is already there.
+        if isinstance(fitsidifiles, str):
+            fitsidifiles = sorted(glob.glob(fitsidifiles), key=natsort_keygen())
+        elif not isinstance(fitsidifiles, list):
+            raise TypeError(f"The argument fitsidifiles should be either a list or str. "
+                            f"Currently is {fitsidifiles} (type {type(fitsidifiles)})")
+
         for a_fitsidi in fitsidifiles:
             if not os.path.isfile(a_fitsidi):
                 raise FileNotFoundError(f"The file {a_fitsidi} could not be found.")
