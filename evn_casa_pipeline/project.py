@@ -789,15 +789,24 @@ class Ms(Project):
     def import_lba_fits(self, fitsfile: str):
         raise NotImplementedError
 
-    def import_evn_fitsidi(self, fitsidifiles):
+    def import_evn_fitsidi(self, fitsidifiles, ignore_antab=False, ignore_uvflg=False):
         """Imports the provided FITS-IDI files from an EVN observation into a single MS file.
         If checks if the FITS-IDI files already contain the Tsys and GC tables. Otherwise, it
         will first append such information and then import the files.
+
+        If a .uvflg file exists (AIPS-format flag file), it will convert it to a CASA-compatible
+        .flag file.
 
         Inputs
             fitsidifiles : list or str
                 If str, it will retrieve all files that match the given path/name.
                 If list, it must be an ordered list of all FITS-IDI files that will be imported.
+            ignore_antab : False
+                If the FITS-IDI files should be imported into a MS without caring about the ANTAB
+                information (not recommended).
+            ignore_uvflg : False
+                If the FITS-IDI files should be imported into a MS without caring about the .uvflg
+                file (AIPS-format a-priori flag table) information (not recommended).
         """
         # First run the Tsys and GC appending to the FITS-IDI. These functions will do nothing
         # if the information is already there.
@@ -811,8 +820,19 @@ class Ms(Project):
             if not os.path.isfile(a_fitsidi):
                 raise FileNotFoundError(f"The file {a_fitsidi} could not be found.")
 
-        fitsidi.append_tsys(f"{self.projectname.lower()}.antab", fitsidifiles)
-        fitsidi.append_gc(f"{self.projectname.lower()}.antab", fitsidifiles[0])
+        antabfile = self.cwd / Path(f"{self.projectname.lower()}.antab")
+        uvflgfile = self.cwd / Path(f"{self.projectname.lower()}.uvflg")
+        if not ignore_antab:
+            assert antabfile.exists()
+            fitsidi.append_tsys(str(antabfile), fitsidifiles)
+            fitsidi.append_gc(str(antabfile), fitsidifiles[0])
+
+        if not ignore_uvflg:
+            assert uvflgfile.exists()
+            fitsidi.convert_flags(infile=str(self.cwd / Path(f"{self.projectname.lower()}.uvflg")),
+                                  idifiles=fitsidifiles,
+                                  outfile=str(self.cwd / Path(f"{self.projectname.lower()}.flag")))
+
         casatasks.importfitsidi(vis=str(self.msfile), fitsidifile=fitsidifiles, constobsid=True,
                                 scanreindexgap_s=8.0, specframe='GEO')
         self.get_metadata_from_ms()
