@@ -412,6 +412,16 @@ class Project(object):
         return self._expname
 
     @property
+    def observatory(self) -> str:
+        """Returns the name of the observatory associated to this project.
+        """
+        return self._observatory
+
+    @observatory.setter
+    def observatory(self, observatory_name: str):
+        self._observatory = observatory_name
+
+    @property
     def cwd(self) -> Path:
         """Working directory for the project.
         """
@@ -468,18 +478,28 @@ class Project(object):
     def last_step(self, last_step):
         self._last_step = last_step
 
-    def __init__(self, projectname: str, params: dict):
+    def __init__(self, projectname: str, params: dict, observatory: str = None):
         """Initializes an EVN experiment with the given name.
 
         Inputs:
-        - expname : str
-               The name of the experiment (case insensitive).
+            projectname : str
+               The name of the project (case insensitive).
+
+            params : dict
+               Parameters associated to the project for its data reduction.
+               Should define the type of sources (target, phaseref, fringefinder), and other
+               options for the different calibration steps.
+
+            observatory : str
+                Name of the observatory associated to this project.
+                If not specified, it will be read from the MS when exists.
         """
         self._expname = projectname
         self._obsdate = None
         self._refant = []
         self._startime = None
         self._endtime = None
+        self.observatory = observatory
         # logpath = Path("./logs")
         # logpath.mkdir(parents=True, exist_ok=True)
         # self._logs = {'dir': logpath, 'file': Path("./processing.log)")}
@@ -739,6 +759,14 @@ class Ms(Project):
 
                 with pt.table(ms.getkeyword('DATA_DESCRIPTION'), readonly=True, ack=False) as ms_spws:
                     spw_names = ms_spws.getcol('SPECTRAL_WINDOW_ID')
+
+                with pt.table(ms.getkeyword('OBSERVATION'), readonly=True, ack=False) as ms_obs:
+                    telescope_name = ms_obs.getcol('TELESCOPE_NAME')
+                    if self.observatory is None:
+                        self.observatory = ','.join(telescope_name)
+                    elif self.observatory != telescope_name[0]:
+                        rprint("[orange]WARNING: the observatory name in MS does not match the one "
+                               "provided in the project[/orange]")
 
                 ant_subband = defaultdict(set)
                 print('\nReading the MS to find the missing antennas...')
