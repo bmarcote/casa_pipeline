@@ -412,6 +412,12 @@ class Project(object):
         return self._expname
 
     @property
+    def cwd(self) -> Path:
+        """Working directory for the project.
+        """
+        return self._cwd
+
+    @property
     def epoch(self) -> dt.date:
         """Epoch at which the EVN experiment was observed (starting date).
         """
@@ -477,7 +483,13 @@ class Project(object):
         # logpath = Path("./logs")
         # logpath.mkdir(parents=True, exist_ok=True)
         # self._logs = {'dir': logpath, 'file': Path("./processing.log)")}
-        self._local_copy = Path(f"./{self._expname.lower()}.obj")
+        if 'cwd' in params:
+            self._cwd = Path(params['cwd'])
+            self.cwd.mkdir(exist_ok=True)
+        else:
+            self._cwd = Path('./')
+
+        self._local_copy = self.cwd / Path(f"{self._expname.lower()}.obj")
         self._last_step = None
         self._args = params
 
@@ -517,27 +529,27 @@ class Project(object):
         with open(self._local_copy, 'wb') as file:
             pickle.dump(self, file)
 
-    def store_json(self, path=None):
-        """Stores the current Experiment into a JSON file.
-        If path not prvided, it will be '{expname.lower()}.json'.
-        """
-        if path is not None:
-            self._local_copy = path
+    # def store_json(self, path=None):
+    #     """Stores the current Experiment into a JSON file.
+    #     If path not prvided, it will be '{expname.lower()}.json'.
+    #     """
+    #     if path is not None:
+    #         self._local_copy = path
+    #
+    #     with open(self._local_copy, 'wb') as file:
+    #         json.dump(self.json(), file, cls=ExpJsonEncoder, indent=4)
 
-        with open(self._local_copy, 'wb') as file:
-            json.dump(self.json(), file, cls=ExpJsonEncoder, indent=4)
-
-    def load(self, path=None):
-        """Loads the current Experiment that was stored in a file in the indicated path. If path is None,
-        it assumes the standard path of '.{exp}.obj' where exp is the name of the experiment.
-        """
-        if path is not None:
-            self._local_copy = path
-
-        with open(self._local_copy, 'rb') as file:
-            obj = pickle.load(file)
-
-        return obj
+    # def load(self, path=None):
+    #     """Loads the current Experiment that was stored in a file in the indicated path. If path is None,
+    #     it assumes the standard path of '.{exp}.obj' where exp is the name of the experiment.
+    #     """
+    #     if path is not None:
+    #         self._local_copy = path
+    #
+    #     with open(self._local_copy, 'rb') as file:
+    #         obj = pickle.load(file)
+    #
+    #     return obj
 
     def __repr__(self, *args, **kwargs):
         rep = super().__repr__(*args, **kwargs)
@@ -554,39 +566,39 @@ class Project(object):
     #                 'last_step', 'gui', 'correlator_passes'):
     #         yield key, getattr(self, key)
 
-    def json(self):
-        """Returns a dict with all attributes of the object.
-        I define this method to use instead of .__dict__ as the later only reporst
-        the internal variables (e.g. _username instead of username) and I want a better
-        human-readable output.
-        """
-        d = dict()
-        for key, val in self.__iter__():
-            if hasattr(val, 'json'):
-                d[key] = val.json()
-            elif isinstance(val, Path):
-                d[key] = val.name
-            elif isinstance(val, dt.datetime):
-                d[key] = val.strftime('%Y-%m-%d')
-            elif isinstance(val, dt.date):
-                d[key] = val.strftime('%Y-%m-%d')
-            elif isinstance(val, list) and (len(val) > 0) and hasattr(val[0], 'json'):
-                d[key] = [v.json() for v in val]
-            elif isinstance(val, tuple) and (len(val) > 0) and isinstance(val[0], dt.datetime):
-                d[key] = [v.strftime('%Y-%m-%d %H:%M:%S') for v in val]
-            elif isinstance(val, dict):
-                d[key] = {}
-                for k, v in val:
-                    if hasattr(v, 'json'):
-                        d[key][k] = v.json()
-                    elif hasattr(v, 'name'):
-                        d[key][k] = v.name
-                    else:
-                        d[key][k] = v
-            else:
-                d[key] = val
-
-        return d
+    # def json(self):
+    #     """Returns a dict with all attributes of the object.
+    #     I define this method to use instead of .__dict__ as the later only reporst
+    #     the internal variables (e.g. _username instead of username) and I want a better
+    #     human-readable output.
+    #     """
+    #     d = dict()
+    #     for key, val in self.__iter__():
+    #         if hasattr(val, 'json'):
+    #             d[key] = val.json()
+    #         elif isinstance(val, Path):
+    #             d[key] = val.name
+    #         elif isinstance(val, dt.datetime):
+    #             d[key] = val.strftime('%Y-%m-%d')
+    #         elif isinstance(val, dt.date):
+    #             d[key] = val.strftime('%Y-%m-%d')
+    #         elif isinstance(val, list) and (len(val) > 0) and hasattr(val[0], 'json'):
+    #             d[key] = [v.json() for v in val]
+    #         elif isinstance(val, tuple) and (len(val) > 0) and isinstance(val[0], dt.datetime):
+    #             d[key] = [v.strftime('%Y-%m-%d %H:%M:%S') for v in val]
+    #         elif isinstance(val, dict):
+    #             d[key] = {}
+    #             for k, v in val:
+    #                 if hasattr(v, 'json'):
+    #                     d[key][k] = v.json()
+    #                 elif hasattr(v, 'name'):
+    #                     d[key][k] = v.name
+    #                 else:
+    #                     d[key][k] = v
+    #         else:
+    #             d[key] = val
+    #
+    #     return d
 
 
 class Ms(Project):
@@ -681,15 +693,9 @@ class Ms(Project):
         assert isinstance(freqsetup, FreqSetup)
         self._freqsetup = freqsetup
 
-    @property
-    def inputs(self) -> dict:
-        """Returns a dictionary with the inputs that the user set in the input file to run the pipeline.
-        """
-        return self._inputs
-
-    def __init__(self, projectname: str, inputs: dict = {}):
-        super().__init__(projectname, inputs)
-        self._msfile = Path(f"{projectname.lower()}.ms")
+    def __init__(self, projectname: str, params: dict = {}):
+        super().__init__(projectname, params)
+        self._msfile = self.cwd / Path(f"{projectname.lower()}.ms")
         self._uvfitsfile = str(self.msfile).replace('.ms', '.uvfits') if '.ms' in str(self.msfile) \
                            else f"{str(self.msfile)}.uvfits"
         self._freqsetup = None
@@ -697,7 +703,15 @@ class Ms(Project):
         self._antennas = Antennas()
         self._refant = list()
         if self.msfile.exists():
-            self.get_metadata_from_ms()
+            try:
+                self.get_metadata_from_ms()
+            except KeyError as e:
+                self.listobs()
+                rprint("\n\n[center][bold red] --- No source information is provided --- [/bold red][/center]\n")
+                rprint("listobs() has run on the associated MS and you should now provide the inforamation "
+                       "about the sources (which ones are targets, calibrators, etc.) in order to continue.\n"
+                       "You can add such information in the input file.")
+                raise KeyError(e)
 
         self.calibrate = calibration.Calibration(self)
         self.flag = flagging.Flagging(self)
@@ -710,6 +724,10 @@ class Ms(Project):
 
     def get_metadata_from_ms(self):
         """Recovers all useful metadata from the MS file and stores it in the object.
+
+        -- May Raise
+        It may raise KeyError if the type of sources (target, phaseref, fringefinder) are not specified
+        in the self.params dict.
         """
         try:
             with pt.table(self.msfile.name, readonly=True, ack=False) as ms:
@@ -745,7 +763,6 @@ class Ms(Project):
                     src_names = ms_field.getcol('NAME')
                     src_coords = ms_field.getcol('PHASE_DIR')
                     for a_name, a_coord in zip(src_names, src_coords):
-                        #TODO: check how I do specify this in the json file
                         if a_name in self.params['target']:
                             a_type = SourceType.target
                         elif a_name in self.params['phaseref']:
@@ -799,6 +816,10 @@ class Ms(Project):
         casatasks.importfitsidi(vis=str(self.msfile), fitsidifile=fitsidifiles, constobsid=True,
                                 scanreindexgap_s=8.0, specframe='GEO')
         self.get_metadata_from_ms()
+
+    def listobs(self, listfile: str = None):
+        listfile = self.cwd / f"{self.projectname}-listobs.log" if listfile is None else listfile
+        casatasks.listobs(self.msfile.name, listfile=listfile)
 
     def __iter__(self):
         for key in ('msfile', 'fitsidifiles', 'sources', 'antennas', 'freqsetup'):

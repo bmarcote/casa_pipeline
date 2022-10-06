@@ -1,7 +1,9 @@
 """Contains all functions concerning calibration of a VLBI project in MS format within (or out) CASA.
 """
+import os
 import shutil
 from pathlib import Path
+import subprocess
 from dataclasses import dataclass
 import casatasks
 from casatasks.private import tec_maps
@@ -183,7 +185,7 @@ class Calibration(object):
 
         if not calgc.exists():
             print(f"Generating GC calibration table {calgc}.")
-            casatasks.gencal(vis=str(project.msfile), caltable=str(calgc), caltype='gc')
+            casatasks.gencal(vis=str(self._ms.msfile), caltable=str(calgc), caltype='gc')
             self.callib.new_entry(name='gccal', calfile=str(calgc),
                                   parameters=f"caltable='{calgc}' tinterp='nearest' finterp='nearest'")
             print(f"GC calibration table {calgc} properly generated.")
@@ -201,8 +203,8 @@ class Calibration(object):
         if not accor_caltable_smooth.exists():
             print(f"Generating ACCOR calibration table {accor_caltable_smooth}.")
             casatasks.accor(vis=str(self._ms.msfile), caltable=str(accor_caltable), solint='30s',
-                            docallib=True, callib=str(project.caldir / "cal_library.txt"))
-            casatasks.smoothcal(vis=str(project.msfile), tablein=accor_caltable, caltable=accor_caltable_smooth,
+                            docallib=True, callib=str(self.caldir / "cal_library.txt"))
+            casatasks.smoothcal(vis=str(self._ms.msfile), tablein=accor_caltable, caltable=accor_caltable_smooth,
                                 smoothtype='median', smoothtime=1800.0)
             self.callib.new_entry(name='accor', calfile=str(accor_caltable_smooth),
                                   parameters=f"caltable='{accor_caltable_smooth}' tinterp='nearest'  " \
@@ -216,8 +218,9 @@ class Calibration(object):
         """Runs the ionospheric calibration if required (i.e. if the observation was conducted at less than 6 GHz).
         This can also be turned off in the input parameter files.
         """
-        #TODO: change this inputs accordingly to the final structure of the input file.
-        if (self._ms.freqsetup.frequency < 6*u.GHz) and (self._ms.inputs['do_ionospheric']):
+        if self._ms.params['calibration']['do_ionospheric'] or \
+                                    ((self._ms.freqsetup.frequency < 6*u.GHz) and \
+                                     (self._ms.params['calibration']['do_ionospheric'] is None)):
             caltec = self.caldir / f"{str(self._ms.msfile).lower()}.tec"
             imtec  = self.caldir / f"{str(self._ms.msfile).lower()}"
             if not caltec.exists():
@@ -259,11 +262,15 @@ class Calibration(object):
                 'mbd': (self.caldir/f"{str(self._ms.msfile).lower()}.mbd"),
                 'bp': (self.caldir/f"{str(self._ms.msfile).lower()}.bp")}
 
+        if self._ms.params['calibration']['sbd_timerange'] is None:
+            self._ms.params['calibration']['sbd_timerange'] = self.compute_sbd_timerange()
+
         if cals['sbd'].exists():
             print(f"No instrumental delay calibration performed as the table {cals['sbd']} already exists.")
         else:
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
-                                timerange=project.params['sbd_timerange'], solint='inf', zerorates=True,
+                                timerange=self._ms.params['calibration']['sbd_timerange'],
+                                solint='inf', zerorates=True,
                                 refant=','.join(self._ms.refant), minsnr=50, docallib=True,
                                 callib=str(self.callib), parang=True)
             self.callib.new_entry(name='sbd', calfile=str(cals['sbd']),
@@ -274,12 +281,12 @@ class Calibration(object):
         else:
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['mbd']),
                                 field=','.join(self._ms.calibrators), solint='inf', zerorates=False,
-                                refant=','.join(self.refant), combine='spw', minsnr=5, docallib=True,
+                                refant=','.join(self._ms.refant), combine='spw', minsnr=5, docallib=True,
                                 callib=str(self.callib), parang=True)
             spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd']))
             self.callib.new_entry(name='mbd', calfile=str(cals['mbd']),
                                   parameters=f"caltable='{cals['mbd']}' tinterp='linear' " \
-                                             f"spwmap={project.nsubbands*[spw_with_solutions]}")
+                                             f"spwmap={self._ms.freqsetup.n_subbands*[spw_with_solutions]}")
 
         if cals['bp'].exists():
             print(f"No bandpass calibration performed as the table {cals['bp']} already exists.")
@@ -303,11 +310,14 @@ class Calibration(object):
         cals = {'sbd2': self.caldir/f"{str(self._ms.msfile).lower()}.sbd2",
                 'mbd2': self.caldir/f"{str(self._ms.msfile).lower()}.mbd2"}
 
+        if self._ms.params['calibration']['sbd_timerange'] is None:
+            self._ms.params['calibration']['sbd_timerange'] = self.compute_sbd_timerange()
+
         if cals['sbd2'].exists():
             print(f"No second instrumental delay calibration performed as the table {cals['sbd2']} already exists.")
         else:
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd2']),
-                                timerange=project.params['sbd_timerange'], solint='inf', zerorates=True,
+                                timerange=self._ms.params['sbd_timerange'], solint='inf', zerorates=True,
                                 refant=','.join(self._ms.refant), minsnr=50, docallib=True,
                                 callib=str(self.callib), parang=True)
             self.callib.new_entry(name='sbd2', calfile=str(cals['sbd2']),
@@ -323,7 +333,7 @@ class Calibration(object):
             spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd2']))
             self.callib.new_entry(name='mbd2', calfile=str(cals['mbd2']),
                                   parameters=f"caltable='{cals['mbd2']}' tinterp='linear' " \
-                                             f"spwmap={project.nsubbands*[spw_with_solutions]}")
+                                             f"spwmap={self._ms.freqsetup.n_subbands*[spw_with_solutions]}")
 
 
     def apply_calibration(self):
