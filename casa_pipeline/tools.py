@@ -1,17 +1,17 @@
 import sys
-
 import subprocess
+from typing import Iterable, Union, Optional
 
 
 
 
-def shell_command(command, parameters=None, shell=True, bufsize=-1,
-                  stdout=None, stderr=subprocess.STDOUT):
+def shell_command(command: str, parameters: Optional[Union[str, Iterable[str]]] = None, shell: bool = True,
+                  bufsize=-1, stdout=None, stderr=subprocess.STDOUT):
     """Runs the provided command in the shell with some arguments if necessary.
     Returns the output of the command, assuming a UTF-8 encoding, or raises ValueError
     if fails. Parameters must be either a single string or a list, if provided.
     """
-    if isinstance(parameters, list):
+    if isinstance(parameters, Iterable):
         full_shell_command = [command] + parameters
     else:
         full_shell_command = [command] if parameters is None else [command, parameters]

@@ -1,0 +1,16 @@
+
+---
+project_name: a_name
+target: a_source
+phaseref: a_pcal
+fringefinder: a_ff
+
+evn_fitsidi: false
+lba_uvfits: false
+
+calibration:
+    do_ionospheric: "default"
+    sbd_timerange: "default"
+
+quack:
+    all: 5.0

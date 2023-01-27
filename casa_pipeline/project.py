@@ -11,6 +11,7 @@ import subprocess
 import datetime as dt
 import numpy as np
 from pathlib import Path
+from typing import Optional, Iterable, NoReturn, List, Union, Tuple
 from dataclasses import dataclass
 from collections import defaultdict
 from natsort import natsort_keygen
@@ -19,33 +20,31 @@ import casatasks
 from enum import Enum
 from astropy import units as u
 from rich import print as rprint
+from rich import progress
 # import blessed
 from astropy import coordinates as coord
 from casavlbitools import fitsidi
 from . import calibration
 from . import flagging
 from . import imaging
+from . import plotting
 
 
-def chunkert(f, l, cs):
-    """Silly function to select a subset of an interval (f, f+cs) : 0 < f < l.
+def chunkert(counter: int, max_length: int, increment: int) -> Tuple[int, int]:
+    """Silly function to select a subset of an interval in
+       [counter, counter + increment] : 0 < counter < max_length.
+
+    Yields the tuple (counter, + interval_increment) : interval_increment = min(increment, max_length - counter))
     """
-    while f<l:
-        n = min(cs, l-f)
-        yield (f, n)
-        f = f + n
+    while counter < max_length:
+        this_increment = min(increment, max_length - counter)
+        yield (counter, this_increment)
+        counter += this_increment
 
-percent = lambda x, y: (float(x)/float(y))*100.0
-
-
-def cli_progress_bar(current_val, end_val, bar_length=40):
-    """Creates a progress bar in the terminal.
+def percentage(x, y):
+    """Returns the percentage value of  100 * x / y.
     """
-    percent = current_val/end_val
-    hashes = '#'*int(round(percent*bar_length))
-    spaces = ' '*(bar_length-len(hashes))
-    sys.stdout.write("\rProgress: [{0}] {1}%".format(hashes+spaces, int(round(percent*100))))
-    sys.stdout.flush()
+    return (x / y)*100.0
 
 
 class SourceType(Enum):
@@ -79,7 +78,21 @@ class Source(object):
         """
         return self._type
 
-    def __init__(self, name: str, sourcetype: SourceType, coordinates: coord.SkyCoord):
+    @property
+    def model(self) -> Path:
+        """Source model file (generated after imaging or other tasks and can be used for calibration).
+        """
+        return self._model
+
+    @model.setter
+    def model(self, new_model: Union[Path, str]):
+        if isinstance(new_model, str):
+            new_model = Path(new_model)
+
+        self._model = new_model
+
+    def __init__(self, name: str, sourcetype: SourceType, coordinates: coord.SkyCoord,
+                 model: Optional[[Path, str]] = None):
         assert isinstance(name, str), f"The name of the source must be a string (currrently {name})"
         assert isinstance(sourcetype, SourceType), \
                f"The name of the source must be a SourceType object (currrently {sourcetype})"
@@ -88,6 +101,7 @@ class Source(object):
         self._name = name
         self._type = sourcetype
         self._coordinates = coordinates
+        self.model = model
 
     def __iter__(self):
         for key in ('name', 'type', 'protected'):
@@ -120,57 +134,65 @@ class Source(object):
 class Sources(object):
     """Defines a collection of sources.
     """
-    def __init__(self, sources=None):
+    def __init__(self, sources: Optional[Iterable[Source]] = None):
         if sources is not None:
             self._sources = sources[:]
         else:
             self._sources = []
 
-    def add(self, new_source):
-        self.append(new_source)
+    def append(self, new_source: Source) -> NoReturn:
+        """Adds a new source to the collection of sources.
 
-    def append(self, new_source):
+        Note that this function and "add" are completely equivalent.
+        """
         assert isinstance(new_source, Source)
         self._sources.append(new_source)
 
+    def add(self, new_source: Source) -> NoReturn:
+        """Adds a new source to the collection of sources.
+
+        Note that this function and "add" are completely equivalent.
+        """
+        self.append(new_source)
+
     @property
-    def names(self):
+    def names(self) -> List[str]:
         """Returns the names of all sources included in Sources.
         """
         return [s.name for s in self._sources]
 
     @property
-    def types(self):
+    def types(self) -> List[SourceType]:
         """Returns the types of all sources in Sources.
         """
         return [s.type for s in self._sources]
 
     @property
-    def coordinates(self):
+    def coordinates(self) -> List[coord.SkyCoord]:
         """Returns the coordinates of all sources in Sources.
         """
         return [s.coordinates for s in self._sources]
 
     @property
-    def targets(self):
+    def targets(self) -> Sources:
         """Returns the target sources.
         """
         return Sources([s for s in self._sources if s.type == SourceType.target])
 
     @property
-    def calibrators(self):
+    def calibrators(self) -> Sources:
         """Returns the phase calibrator sources.
         """
         return Sources([s for s in self._sources if s.type == SourceType.calibrator])
 
     @property
-    def other_sources(self):
+    def other_sources(self) -> Sources:
         """Returns the sources catalogued as "others".
         """
         return Sources([s for s in self._sources if s.type == SourceType.other])
 
     @property
-    def fringe_finders(self):
+    def fringe_finders(self) -> Sources:
         """Returns the fringe-finder sources.
         """
         return Sources([s for s in self._sources if s.type == SourceType.fringefinder])
@@ -214,36 +236,53 @@ class Sources(object):
 
 @dataclass
 class Antenna:
-    """Defines an antenna in the array.
+    """Defines an antenna.
+    It has three parameters:
+        name : str
+            Name of the antenna
+        observed : bool
+            If the antenna has observed (has no-null data).
+        subbands : tuple
+            Tuple with the subbands numbers where the antenna observed.
+            It may be all subbands covered in the observation or a subset of them.
     """
     name: str
-    observed: bool = False
+    observed: bool = True
     subbands: tuple = ()
 
 
 class Antennas(object):
     """List of antennas (Antenna class)
     """
-    def __init__(self, antennas=None):
+    def __init__(self, antennas: Optional[Iterable[Antenna]] = None):
         if antennas is not None:
             self._antennas = antennas[:]
         else:
             self._antennas = []
 
-    def add(self, new_antenna: Antenna):
-        """Adds a new antenna to the list of antennas.
+    def append(self, new_antenna: Antenna) -> NoReturn:
+        """Adds a new antenna to the collection of antennas.
+
+        Note that this function and "add" are completely equivalent.
+        """
+        self.add(new_antenna)
+
+    def add(self, new_antenna: Antenna) -> NoReturn:
+        """Adds a new antenna to the collection of antennas.
+
+        Note that this function and "add" are completely equivalent.
         """
         assert isinstance(new_antenna, Antenna)
         self._antennas.append(new_antenna)
 
     @property
-    def names(self):
+    def names(self) -> List[str]:
         """Returns the name of the antenna
         """
         return [a.name for a in self._antennas]
 
     @property
-    def observed(self):
+    def observed(self) -> List[tuple]:
         """Returns the antenna names that have data (have observed) in the observation
         """
         return [a.name for a in self._antennas if a.observed]
@@ -344,12 +383,12 @@ class FreqSetup(object):
         return self._bandwidth_spw * self.n_subbands
 
     @property
-    def frequency_range(self) -> tuple:
+    def frequency_range(self) -> tuple[u.Quantity, u.Quantity]:
         """Returns the lowest and highest frequency observed.
         """
         return (self.frequency - self.bandwidth/2, self.frequency + self.bandwidth/2)
 
-    def __init__(self, chans: int, freqs, bandwidth_spw):
+    def __init__(self, channels: int, frequencies, bandwidth_spw: Union[float, u.Quantity]):
         """Inputs:
             - chans : int
                 Number of channels per subband.
@@ -359,14 +398,14 @@ class FreqSetup(object):
             - bandwidth_spw : float or astropy.units.Quantity
                 Total bandwidth for each subband. If not units are provided, Hz are assumed.
         """
-        self._n_subbands = freqs.shape[0]
-        assert isinstance(chans, (int, np.int32, np.int64)), \
-            f"Chans {chans} is not an int as expected (found type {type(chans)})."
+        self._n_subbands = frequencies.shape[0]
+        assert isinstance(channels, (int, np.int32, np.int64)), \
+            f"Chans {channels} is not an int as expected (found type {type(channels)})."
         assert isinstance(bandwidth_spw, float) or isinstance(bandwidth_spw, u.Quantity), \
             f"Bandwidth {bandwidth_spw} is not a float or Quantity as expected (found {type(bandwidth_spw)})."
-        assert freqs.shape == (self._n_subbands, chans)
-        self._channels = int(chans)
-        self._freqs = np.copy(freqs)
+        assert frequencies.shape == (self._n_subbands, channels)
+        self._channels = int(channels)
+        self._freqs = np.copy(frequencies)
         if isinstance(bandwidth_spw, float):
             self._bandwidth_spw = bandwidth_spw*1e-9*u.GHz
         else:
@@ -403,61 +442,48 @@ class FreqSetup(object):
 
 
 class Project(object):
-    """Defines and EVN experiment with all relevant metadata.
+    """Defines a (VLBI) observation with all relevant metadata.
     """
     @property
     def projectname(self) -> str:
-        """Name of the EVN experiment, in upper case.
+        """Name of the project associated to the observation.
         """
         return self._expname
 
     @property
     def observatory(self) -> str:
-        """Returns the name of the observatory associated to this project.
+        """Returns the name of the observatory that conducted the observations.
         """
         return self._observatory
 
     @observatory.setter
     def observatory(self, observatory_name: str):
+        assert isinstance(observatory_name, str)
         self._observatory = observatory_name
 
     @property
     def cwd(self) -> Path:
-        """Working directory for the project.
+        """Returns the working directory for the project.
         """
         return self._cwd
 
     @property
-    def epoch(self) -> dt.date:
-        """Epoch at which the EVN experiment was observed (starting date).
+    def logdir(self) -> Path:
+        """Returns the directory where the log outputs from the process are stored.
         """
-        return self._obsdate
-
-    @epoch.setter
-    def epoch(self, obsdate: dt.date):
-        assert isinstance(obsdate, dt.date), "obsdate needs to be of datetime.date type " \
-                                             f"(currently {obsdate} is {type(obsdate)})."
-        self._obsdate = obsdate
+        return self._logdir
 
     @property
-    def timerange(self):
-        """Start and end time of the observation in datetime format.
+    def caldir(self) -> Path:
+        """Returns the directory where the calibration table files are stored.
         """
-        return self._startime, self._endtime
+        return self._caldir
 
-    @timerange.setter
-    def timerange(self, times):
-        """Start and end time of the observation in datetime format.
-        Input:
-            - times : tuple of datetime
-                Tupple with (startime, endtime), each of them in datetime format.
+    @property
+    def outdir(self) -> Path:
+        """Returns the output directory where images, plots and other final products are stored.
         """
-        starttime, endtime = times
-        assert isinstance(starttime, dt.datetime)
-        assert isinstance(endtime, dt.datetime)
-        self._startime = starttime
-        self._endtime = endtime
-        self.epoch = starttime.date()
+        return self._outdir
 
     @property
     def params(self) -> dict:
@@ -478,60 +504,50 @@ class Project(object):
     def last_step(self, last_step):
         self._last_step = last_step
 
-    def __init__(self, projectname: str, params: dict, observatory: str = None):
+    def __init__(self, projectname: str, observatory: Optional[str] = '', params: dict = None,
+                 cwd: Optional[Union[Path, str]] = None):
         """Initializes an EVN experiment with the given name.
 
         Inputs:
             projectname : str
                The name of the project (case insensitive).
 
-            params : dict
-               Parameters associated to the project for its data reduction.
-               Should define the type of sources (target, phaseref, fringefinder), and other
-               options for the different calibration steps.
-
-            observatory : str
+            observatory : str  [default = '']
                 Name of the observatory associated to this project.
                 If not specified, it will be read from the MS when exists.
+
+            params : dict  [optional]
+                Default parameters read from the pipeline input file and are loaded here.
+
+            cwd : Path or str  [optional. Default = $PWD]
+                The default directory where the pipeline will run, search for and create the files.
         """
+        assert projectname != '', "The projectname cannot be an empty string"
         self._expname = projectname
-        self._obsdate = None
-        self._refant = []
-        self._startime = None
-        self._endtime = None
         self.observatory = observatory
         # logpath = Path("./logs")
         # logpath.mkdir(parents=True, exist_ok=True)
         # self._logs = {'dir': logpath, 'file': Path("./processing.log)")}
-        if 'cwd' in params:
-            self._cwd = Path(params['cwd'])
-            self.cwd.mkdir(exist_ok=True)
-        else:
+        # if 'cwd' in params:
+        if cwd is None:
             self._cwd = Path('./')
+        elif isinstance(cwd, str):
+            self._cwd = Path(cwd)
+        elif isinstance(cwd, Path):
+            self._cwd = cwd
+        else:
+            TypeError(f"The working directory ({cwd}) should be either None, a Path type, or a str.")
 
-        self._local_copy = self.cwd / Path(f"{self._expname.lower()}.obj")
-        self._last_step = None
-        self._args = params
+        self._logdir = self.cwd / 'log'
+        self._caldir = self.cwd / 'caltables'
+        self._outdir = self.cwd / 'results'
 
-    # @property
-    # def logfile(self):
-    #     """Returns a dict with the logs, with two keys:
-    #     - 'dir': the directory where individual log files can be stored (by default 'logs/')
-    #     - 'file': the 'processing.log' file which stores all steps that run during the post-processing
-    #               of the experiment.
-    #     """
-    #     return self._logs
+        for a_dir in (self.cwd, self.logdir, self.caldir, self.outdir):
+            a_dir.mkdir(exist_ok=True)
 
-    # def log(self, entry, timestamp=False):
-    #     """Writes into the processing.log file a new entry.
-    #     """
-    #     if timestamp:
-    #         cmd = f"# {dt.datetime.today().strftime('%d-%m-%Y %H:%M')}\n{entry}\n"
-    #     else:
-    #         cmd = f"{entry}\n"
-    #
-    #     with open(self.logfile['file'], 'a') as logfile:
-    #         logfile.write(cmd)
+        self._local_copy = self.cwd / Path(f"{self.projectname.lower()}.obj")
+        # self._last_step = None
+        # self._args = params
 
 
     def exists_local_copy(self):
@@ -539,7 +555,7 @@ class Project(object):
         """
         return self._local_copy.exists()
 
-    def store(self, path=None):
+    def store(self, path : Optional[Union[Path, str]] = None):
         """Stores the current Experiment into a file in the indicated path. If not provided,
         it will be '.{expname.lower()}.obj' where exp is the name of the experiment.
         """
@@ -549,27 +565,17 @@ class Project(object):
         with open(self._local_copy, 'wb') as file:
             pickle.dump(self, file)
 
-    # def store_json(self, path=None):
-    #     """Stores the current Experiment into a JSON file.
-    #     If path not prvided, it will be '{expname.lower()}.json'.
-    #     """
-    #     if path is not None:
-    #         self._local_copy = path
-    #
-    #     with open(self._local_copy, 'wb') as file:
-    #         json.dump(self.json(), file, cls=ExpJsonEncoder, indent=4)
+    def load(self, path: Optional[Union[Path, str]] = None):
+        """Loads the current Experiment that was stored in a file in the indicated path. If path is None,
+        it assumes the standard path of '.{exp}.obj' where exp is the name of the experiment.
+        """
+        if path is not None:
+            self._local_copy = path
 
-    # def load(self, path=None):
-    #     """Loads the current Experiment that was stored in a file in the indicated path. If path is None,
-    #     it assumes the standard path of '.{exp}.obj' where exp is the name of the experiment.
-    #     """
-    #     if path is not None:
-    #         self._local_copy = path
-    #
-    #     with open(self._local_copy, 'rb') as file:
-    #         obj = pickle.load(file)
-    #
-    #     return obj
+        with open(self._local_copy, 'rb') as file:
+            obj = pickle.load(file)
+
+        return obj
 
     def __repr__(self, *args, **kwargs):
         rep = super().__repr__(*args, **kwargs)
@@ -579,46 +585,6 @@ class Project(object):
     def __str__(self):
         return f"<Project {self.projectname}>"
 
-    # def __iter__(self):
-    #     for key in ('expname', 'eEVNname', 'piname', 'email', 'supsci', 'obsdate', 'obsdatetime',
-    #                 'timerange', 'sources', 'sources_stdplot', 'antennas', 'refant', 'credentials',
-    #                 'cwd', 'logfile', 'vix', 'expsum', 'special_params',
-    #                 'last_step', 'gui', 'correlator_passes'):
-    #         yield key, getattr(self, key)
-
-    # def json(self):
-    #     """Returns a dict with all attributes of the object.
-    #     I define this method to use instead of .__dict__ as the later only reporst
-    #     the internal variables (e.g. _username instead of username) and I want a better
-    #     human-readable output.
-    #     """
-    #     d = dict()
-    #     for key, val in self.__iter__():
-    #         if hasattr(val, 'json'):
-    #             d[key] = val.json()
-    #         elif isinstance(val, Path):
-    #             d[key] = val.name
-    #         elif isinstance(val, dt.datetime):
-    #             d[key] = val.strftime('%Y-%m-%d')
-    #         elif isinstance(val, dt.date):
-    #             d[key] = val.strftime('%Y-%m-%d')
-    #         elif isinstance(val, list) and (len(val) > 0) and hasattr(val[0], 'json'):
-    #             d[key] = [v.json() for v in val]
-    #         elif isinstance(val, tuple) and (len(val) > 0) and isinstance(val[0], dt.datetime):
-    #             d[key] = [v.strftime('%Y-%m-%d %H:%M:%S') for v in val]
-    #         elif isinstance(val, dict):
-    #             d[key] = {}
-    #             for k, v in val:
-    #                 if hasattr(v, 'json'):
-    #                     d[key][k] = v.json()
-    #                 elif hasattr(v, 'name'):
-    #                     d[key][k] = v.name
-    #                 else:
-    #                     d[key][k] = v
-    #         else:
-    #             d[key] = val
-    #
-    #     return d
 
 
 class Ms(Project):
@@ -634,7 +600,7 @@ class Ms(Project):
         return self._msfile
 
     @msfile.setter
-    def msfile(self, new_msfile):
+    def msfile(self, new_msfile: Union[Path, str]):
         if isinstance(new_msfile, Path):
             self._msfile = new_msfile
         elif isinstance(new_msfile, str):
@@ -650,7 +616,7 @@ class Ms(Project):
         return self._uvfitsfile
 
     @uvfitsfile.setter
-    def uvfitsfile(self, new_uvfitsfile):
+    def uvfitsfile(self, new_uvfitsfile: Union[Path, str]):
         if isinstance(new_uvfitsfile, Path):
             self._uvfitsfile = new_uvfitsfile
         elif isinstance(new_uvfitsfile, str):
@@ -713,11 +679,43 @@ class Ms(Project):
         assert isinstance(freqsetup, FreqSetup)
         self._freqsetup = freqsetup
 
-    def __init__(self, projectname: str, params: dict = {}):
-        super().__init__(projectname, params)
+    @property
+    def epoch(self) -> dt.date:
+        """Epoch at which the project was observed (starting date).
+        """
+        return self._obsdate
+
+    @epoch.setter
+    def epoch(self, obsdate: dt.date):
+        assert isinstance(obsdate, dt.date), "obsdate needs to be of datetime.date type " \
+                                             f"(currently {obsdate} is {type(obsdate)})."
+        self._obsdate = obsdate
+
+    @property
+    def timerange(self) -> tuple:
+        """Returns a tuple with the start and end time of the observation in datetime format.
+        """
+        return self._startime, self._endtime
+
+    @timerange.setter
+    def timerange(self, times: Tuple[dt.datetime]):
+        """Start and end time of the observation in datetime format.
+        Input:
+            - times : tuple of datetime
+                Tupple with (startime, endtime), each of them in datetime format.
+        """
+        starttime, endtime = times
+        assert isinstance(starttime, dt.datetime)
+        assert isinstance(endtime, dt.datetime)
+        self._startime = starttime
+        self._endtime = endtime
+        self.epoch = starttime.date()
+
+    def __init__(self, projectname: str, observatory: Optional[str] = '', params: Optional[dict] = None,
+                 cwd: Optional[Union[Path, str]] = None):
+        super().__init__(projectname, observatory, params, cwd)
         self._msfile = self.cwd / Path(f"{projectname.lower()}.ms")
-        self._uvfitsfile = str(self.msfile).replace('.ms', '.uvfits') if '.ms' in str(self.msfile) \
-                           else f"{str(self.msfile)}.uvfits"
+        self._uvfitsfile = self.cwd / self.msfile.name.replace('.ms', '.uvfits')
         self._freqsetup = None
         self._sources = Sources()
         self._antennas = Antennas()
@@ -733,9 +731,16 @@ class Ms(Project):
                        "You can add such information in the input file.")
                 raise KeyError(e)
 
+        # TODO: differenciate between observatories
         self.calibrate = calibration.Calibration(self)
+        # if self.observatory.upper() in ('EVN', 'EEVN', 'E-EVN', 'VLBI', 'VLBA', 'LBA'):
+        #     self.calibrate = vlbicalibration.Calibration(self)
+        # elif self.observatory.upper() is 'GMRT':
+        #     self.calibrate = gmrtcalibration.Calibration(self)
+
         self.flag = flagging.Flagging(self)
-        self.images = imaging.Imaging(self)
+        self.plot = plotting.Plotting(self)
+        self.image = imaging.Imaging(self)
 
     def exists(self):
         """Returns if the associated MS file exists.
@@ -815,9 +820,10 @@ class Ms(Project):
 
 
     def import_lba_fits(self, fitsfile: str):
+        # TODO: LBA import in CASA?
         raise NotImplementedError
 
-    def import_evn_fitsidi(self, fitsidifiles, ignore_antab=False, ignore_uvflg=False):
+    def import_evn_fitsidi(self, fitsidifiles: Union[list, str], ignore_antab=False, ignore_uvflg=False):
         """Imports the provided FITS-IDI files from an EVN observation into a single MS file.
         If checks if the FITS-IDI files already contain the Tsys and GC tables. Otherwise, it
         will first append such information and then import the files.
@@ -865,51 +871,6 @@ class Ms(Project):
                                 scanreindexgap_s=8.0, specframe='GEO')
         self.get_metadata_from_ms()
 
-    def listobs(self, listfile: str = None):
-        listfile = self.cwd / f"{self.projectname}-listobs.log" if listfile is None else listfile
-        casatasks.listobs(self.msfile.name, listfile=listfile)
-
-    def __iter__(self):
-        for key in ('msfile', 'fitsidifiles', 'sources', 'antennas', 'freqsetup'):
-            yield key, getattr(self, key)
-
-    def json(self):
-        """Returns a dict with all attributes of the object.
-        I define this method to use instead of .__dict__ as the later only reporst
-        the internal variables (e.g. _username instead of username) and I want a better
-        human-readable output.
-        """
-        d = dict()
-        for key, val in self.__iter__():
-            if hasattr(val, 'json'):
-                d[key] = val.json()
-            elif isinstance(val, Path):
-                d[key] = val.name
-            elif isinstance(val, list):
-                d[key] = [v.json() for v in val]
-            else:
-                d[key] = val
-
-        return d
-
-
-
-class ExpJsonEncoder(json.JSONEncoder):
-    """Encodes properly the Experiment class to be able to be written as a JSON format
-    """
-    def default(self, obj):
-        if isinstance(obj, dt.datetime):
-            return obj.strftime('%Y-%m-%d %H:%M:%S')
-        elif isinstance(obj, dt.date):
-            return obj.strftime('%Y-%m-%d')
-        elif hasattr(obj, 'json'):
-            return obj.json()
-        elif isinstance(obj, Path):
-            return obj.name
-        elif isinstance(obj, np.ndarray):
-            return list(obj)
-        else:
-            print(obj)
-            return json.JSONEncoder.default(self, obj)
-
-
+    def listobs(self, listfile: Union[Path, str] = None):
+        listfile = self.logdir / f"{self.projectname}-listobs.log" if listfile is None else listfile
+        casatasks.listobs(self.msfile.name, listfile=str(listfile))

@@ -1,24 +1,34 @@
 import casatasks
 from . import tools
+from pathlib import Path
+from typing import Optional, Iterable, NoReturn, List, Union, Tuple
+import project
 
 
 class Flagging(object):
-    def __init__(self, ms_obj):
-        self._ms = ms_obj
 
-    def apply_flags_from_file(self, flagfile: str = None):
+    def __init__(self, ms: project.Ms):
+        self._ms = ms
+
+
+    def apply_flags_from_file(self, flagfile: Optional[Union[Path, str]] = None):
         """Applies the flags from a flagging file.
         If the file name is not specified, then it will assumed to be the associated
         a-priori flagging (projectname.flag).
         """
-        flagfile = str(self._ms.cwd / f"{self._ms.project_name}.flag") if flagfile is None else flagfile
+        if isinstance(flagfile, str):
+            flagfile = Path(flagfile)
+
+        flagfile = str(self._ms.cwd / f"{self._ms.projectname.lower()}.flag") if flagfile is None else flagfile
+        assert flagfile.exists(), f"The flagfile {flagfile} cannot be found."
         casatasks.flagdata(vis=str(self._ms.msfile), inpfile=flagfile,
                            reason='any', action='apply', flagbackup=False, savepars=False)
         casatasks.flagmanager(vis=str(self._ms.msfile), mode='save', versionname=f"flags from {flagfile}",
                               comment='A-priori flags prior to any calibration.')
 
+
     def edge_channels(self, edge_fraction: float = 0.1):
-        """Flangs the edge channels of each subband according to the specified edge_fraction.
+        """Flags the edge channels of each subband according to the specified edge_fraction.
         For example, 0.1 (default) will imply to flag the 10% of the channels next to the edge of each subband.
 
         Inputs
@@ -30,6 +40,7 @@ class Flagging(object):
         end = str(self._ms.freqsetup.channels - edge_channel)
         casatasks.flagdata(vis=str(self._ms.msfile), mode='manual', flagbackup=False,
                            spw=f"*:0~{start};{end}~{str(self._ms.freqsetup.channels - 1)}")
+
 
     def quack(self, antenna: str, quack_interval_s: float):
         """Flags the first seconds of data for each scan, defined by quack_interval (in seconds),
@@ -61,6 +72,7 @@ class Flagging(object):
                            timedevscale=timedevscale, freqdevscale=freqdevscale, extendpols=False, growaround=False,
                            action='apply', flagbackup=True, overwrite=True, writeflags=True)
 
+
     def aoflagger(self, strategy_file: str = None):
         """Runs the AOFlagger on the associated MS.
         If you have a costumized AOflagger strategy file, you can use it.
@@ -69,5 +81,3 @@ class Flagging(object):
             tools.shell_command("aoflagger", str(self._ms.msfile))
         else:
             tools.shell_command("aoflagger", ["-strategy", strategy_file, str(self._ms.msfile)])
-
-
