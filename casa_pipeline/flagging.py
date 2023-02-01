@@ -2,11 +2,13 @@ import casatasks
 from . import tools
 from pathlib import Path
 from typing import Optional, Iterable, NoReturn, List, Union, Tuple
-import project
+from . import project
 
 
 class Flagging(object):
-
+    """Class that contains all tasks concerning flagging to the data that can be applied to
+    a Ms object.
+    """
     def __init__(self, ms: project.Ms):
         self._ms = ms
 

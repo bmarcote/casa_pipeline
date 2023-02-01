@@ -354,7 +354,7 @@ class Calibration(object):
                                 timerange=sbd_timerange,
                                 solint='inf', zerorates=True,
                                 refant=','.join(self._ms.refant), minsnr=50, docallib=True,
-                                callib=str(self.callib), parang=True)
+                                callib=str(self.callib), corrdepflags=True, parang=True)
             self.callib.new_entry(name='sbd', caltable=str(cals['sbd']),
                                   parameters=f"caltable='{cals['sbd']}' tinterp='nearest'")
 
@@ -364,7 +364,7 @@ class Calibration(object):
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['mbd']),
                                 field=','.join(self._ms.calibrators), solint='inf', zerorates=False,
                                 refant=','.join(self._ms.refant), combine='spw', minsnr=5, docallib=True,
-                                callib=str(self.callib), parang=True)
+                                callib=str(self.callib), corrdepflags=True, parang=True)
             spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd']))
             self.callib.new_entry(name='mbd', caltable=str(cals['mbd']),
                                   parameters=f"caltable='{cals['mbd']}' tinterp='linear' " \
@@ -410,7 +410,7 @@ class Calibration(object):
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd2']),
                                 timerange=sbd_timerange, solint='inf', zerorates=True,
                                 refant=','.join(self._ms.refant), minsnr=50, docallib=True,
-                                callib=str(self.callib), parang=True)
+                                callib=str(self.callib), corrdepflags=True, parang=True)
             self.callib.new_entry(name='sbd2', caltable=str(cals['sbd2']),
                                   parameters=f"caltable='{cals['sbd2']}' tinterp='nearest'")
 
@@ -420,7 +420,7 @@ class Calibration(object):
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['mbd2']),
                                 field=','.join(self._ms.calibrators), solint='inf', zerorates=False,
                                 refant=','.join(self._ms.refant), combine='spw', minsnr=5, docallib=True,
-                                callib=str(self.callib), parang=True)
+                                callib=str(self.callib), corrdepflags=True, parang=True)
             spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd2']))
             self.callib.new_entry(name='mbd2', caltable=str(cals['mbd2']),
                                   parameters=f"caltable='{cals['mbd2']}' tinterp='linear' " \
