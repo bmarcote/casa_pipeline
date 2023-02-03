@@ -2,6 +2,7 @@
 """Defines a VLBI experiment with all the relevant metadata required during the post-processing.
 The metadata is obtained from the MS itself.
 """
+from __future__ import annotations
 import os
 import sys
 import pickle
@@ -23,7 +24,7 @@ from rich import print as rprint
 from rich import progress
 # import blessed
 from astropy import coordinates as coord
-from casavlbitools import fitsidi
+from casa_pipeline.casavlbitools import fitsidi
 from . import calibration
 from . import flagging
 from . import imaging
@@ -92,7 +93,7 @@ class Source(object):
         self._model = new_model
 
     def __init__(self, name: str, sourcetype: SourceType, coordinates: coord.SkyCoord,
-                 model: Optional[[Path, str]] = None):
+                 model: Optional[Union[Path, str]] = None):
         assert isinstance(name, str), f"The name of the source must be a string (currrently {name})"
         assert isinstance(sourcetype, SourceType), \
                f"The name of the source must be a SourceType object (currrently {sourcetype})"
@@ -731,6 +732,7 @@ class Ms(Project):
                        "You can add such information in the input file.")
                 raise KeyError(e)
 
+    def initialize(self):
         # TODO: differenciate between observatories
         self.calibrate = calibration.Calibration(self)
         # if self.observatory.upper() in ('EVN', 'EEVN', 'E-EVN', 'VLBI', 'VLBA', 'LBA'):
@@ -738,9 +740,10 @@ class Ms(Project):
         # elif self.observatory.upper() is 'GMRT':
         #     self.calibrate = gmrtcalibration.Calibration(self)
 
-        self.flag = flagging.Flagging(self)
-        self.plot = plotting.Plotting(self)
-        self.image = imaging.Imaging(self)
+        # self.flag = flagging.Flagging(self)
+        # self.plot = plotting.Plotting(self)
+        # self.image = imaging.Imaging(self)
+        pass
 
     def exists(self):
         """Returns if the associated MS file exists.
@@ -774,19 +777,22 @@ class Ms(Project):
                                "provided in the project[/orange]")
 
                 ant_subband = defaultdict(set)
-                print('\nReading the MS to find the missing antennas...')
-                for (start, nrow) in chunkert(0, len(ms), 5000):
-                    ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
-                    ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
-                    spws = ms.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
-                    msdata = ms.getcol('DATA', startrow=start, nrow=nrow)
-                    cli_progress_bar(start, len(ms), bar_length=40)
+                print('\nReading the MS to find which antennas actually observed...')
+                with progress.Progress() as progress_bar:
+                    task = progress_bar.add_task("[yellow]Reading MS...", total=len(ms))
+                    for (start, nrow) in chunkert(0, len(ms), 5000):
+                        ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
+                        ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
+                        spws = ms.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
+                        msdata = ms.getcol('DATA', startrow=start, nrow=nrow)
 
-                    for ant_i,antenna_name in enumerate(antenna_col):
-                        for spw in spw_names:
-                            cond = np.where((ants1 == ant_i) & (ants2 == ant_i) & (spws == spw))
-                            if not (abs(msdata[cond]) < 1e-5).all():
-                                ant_subband[antenna_name].add(spw)
+                        for ant_i,antenna_name in enumerate(antenna_col):
+                            for spw in spw_names:
+                                cond = np.where((ants1 == ant_i) & (ants2 == ant_i) & (spws == spw))
+                                if not (abs(msdata[cond]) < 1e-5).all():
+                                    ant_subband[antenna_name].add(spw)
+
+                        progress_bar.update(task, advance=nrow)
 
                 for antenna_name in self.antennas.names:
                     self.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
