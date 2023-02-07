@@ -10,13 +10,13 @@ import casatasks
 from casatasks.private import tec_maps
 import casatools
 from astropy import units as u
-from . import project
+from . import obsdata
 
 
 
 
 """Diferent functions that can be used directly from this module in order to calibrate the data.
-Later on a class Calibration is defined, which will use these functions but by using the Project/Ms objects.
+Later on a class Calibration is defined, which will use these functions but by using the obsdata/Ms objects.
 """
 @dataclass
 class CallibEntry:
@@ -226,7 +226,7 @@ class Calibration(object):
     def sbd_timerange(self, new_timerange: str):
         self._sbd_timerange = new_timerange
 
-    def __init__(self, ms: project.Ms):
+    def __init__(self, ms: obsdata.Ms):
         self._ms = ms
         self._callib = Callib(self.caldir / 'callib.txt')
         self._sbd_timerange = None
@@ -456,7 +456,7 @@ class Calibration(object):
             # TODO: apply flags? there is a parameter like that
             # TODO: craete new Ms objects for each ms so it has
             ########################## NOO:  this functions should be in Ms, not in calibration.
-            splits[a_source.name] = project.Ms(f"{self._ms.projectname}.{a_source.name}")
+            splits[a_source.name] = obsdata.Ms(f"{self._ms.projectname}.{a_source.name}")
 
         return splits
 
@@ -469,7 +469,7 @@ class Calibration(object):
                                    multisource=False, combinespw=True, padwithflags=True)
 
 
-    # def self_calibration(project: project.Project, source_model: str, calmode: str, solint: int):
+    # def self_calibration(project: obsdata.Project, source_model: str, calmode: str, solint: int):
     #     raise NotImplementedError
     #     # Maybe just a function that calls in loop all expected iteractions: p, p, p, a&p, p, a&p, p
     #     # In the amplitude selfcal (not the gscale with combine scan), use solnorm=True so it only corrects for
@@ -481,7 +481,7 @@ class Calibration(object):
 
 
 
-    # def self_calibration_from_difmap_image(project: project.Project):
+    # def self_calibration_from_difmap_image(project: obsdata.Project):
     #     """
     #     Project needs to contain the difmap associated images!!!!!!!!!!!
     #

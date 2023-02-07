@@ -1,12 +1,12 @@
 
-from . import project
+from . import obsdata
 from . import tools
 
 
 class Imaging(object):
     """Defines all imaging tasks that can run over a Ms object
     """
-    def __init__(self, ms: project.Ms):
+    def __init__(self, ms: obsdata.Ms):
         self._ms = ms
 
     def tclean(self):
