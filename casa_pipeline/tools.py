@@ -1,8 +1,24 @@
 import sys
 import subprocess
-from typing import Iterable, Union, Optional
+from typing import Iterable, Union, Optional, Tuple
 
 
+def chunkert(counter: int, max_length: int, increment: int) -> Tuple[int, int]:
+    """Silly function to select a subset of an interval in
+       [counter, counter + increment] : 0 < counter < max_length.
+
+    Yields the tuple (counter, + interval_increment) : interval_increment = min(increment, max_length - counter))
+    """
+    while counter < max_length:
+        this_increment = min(increment, max_length - counter)
+        yield (counter, this_increment)
+        counter += this_increment
+
+
+def percentage(x, y):
+    """Returns the percentage value of  100 * x / y.
+    """
+    return (x / y)*100.0
 
 
 def shell_command(command: str, parameters: Optional[Union[str, Iterable[str]]] = None, shell: bool = True,

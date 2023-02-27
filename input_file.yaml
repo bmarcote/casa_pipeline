@@ -1,4 +1,7 @@
 
+# Maybe it should be TOML???
+# https://realpython.com/python-toml/
+
 ---
 project_name: a_name
 target: a_source

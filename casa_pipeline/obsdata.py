@@ -25,27 +25,11 @@ from rich import progress
 # import blessed
 from astropy import coordinates as coord
 from casa_pipeline.casavlbitools import fitsidi
+from casa_pipeline.casa_pipeline import tools
 # from .calibration import Calibration
 # from . import flagging
 # from . import imaging
 # from . import plotting
-
-
-def chunkert(counter: int, max_length: int, increment: int) -> Tuple[int, int]:
-    """Silly function to select a subset of an interval in
-       [counter, counter + increment] : 0 < counter < max_length.
-
-    Yields the tuple (counter, + interval_increment) : interval_increment = min(increment, max_length - counter))
-    """
-    while counter < max_length:
-        this_increment = min(increment, max_length - counter)
-        yield (counter, this_increment)
-        counter += this_increment
-
-def percentage(x, y):
-    """Returns the percentage value of  100 * x / y.
-    """
-    return (x / y)*100.0
 
 
 class SourceType(Enum):
@@ -650,7 +634,7 @@ class Ms(object):
                 print('\nReading the MS to find which antennas actually observed...')
                 with progress.Progress() as progress_bar:
                     task = progress_bar.add_task("[yellow]Reading MS...", total=len(ms))
-                    for (start, nrow) in chunkert(0, len(ms), 5000):
+                    for (start, nrow) in tools.chunkert(0, len(ms), 5000):
                         ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
                         ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
                         spws = ms.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
