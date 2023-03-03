@@ -4,7 +4,7 @@ The metadata is obtained from the MS itself.
 """
 import pickle
 from pathlib import Path
-from typing import Optional, Iterable, NoReturn, List, Union, Tuple
+from typing import Optional, Union # Iterable, NoReturn, List, Tuple
 from . import obsdata
 from . import calibration
 from . import flagging
@@ -61,7 +61,8 @@ class Project(object):
 
     @params.setter
     def params(self, new_params: dict):
-        assert isinstance(new_params, dict), f"{new_params} should be a dict. Instead is {type(new_params)}"
+        assert isinstance(new_params, dict), \
+               f"{new_params} should be a dict but is {type(new_params)}"
         self._args = new_params
 
     @property
@@ -94,6 +95,10 @@ class Project(object):
     def image(self):
         return self._imaging
 
+    @property
+    def importdata(self):
+        return self._importing
+
     def __init__(self, projectname: str, observatory: Optional[str] = '', params: dict = None,
                  cwd: Optional[Union[Path, str]] = None):
         """Initializes an EVN experiment with the given name.
@@ -112,7 +117,8 @@ class Project(object):
             cwd : Path or str  [optional. Default = $PWD]
                 The default directory where the pipeline will run, search for and create the files.
         """
-        assert (projectname != '') and (isinstance(projectname, str)), "The project name needs to be a non-empty string."
+        assert (projectname != '') and (isinstance(projectname, str)), \
+            "The project name needs to be a non-empty string."
         self._projectname = projectname
         self._observatory = observatory
         # logpath = Path("./logs")
@@ -126,7 +132,7 @@ class Project(object):
         elif isinstance(cwd, Path):
             self._cwd = cwd
         else:
-            TypeError(f"The working directory ({cwd}) should be either None, a Path type, or a str.")
+            TypeError(f"The working directory ({cwd}) should be either None, Path or str.")
 
         self._logdir = self.cwd / 'log'
         self._caldir = self.cwd / 'caltables'
@@ -151,6 +157,7 @@ class Project(object):
         self._flagging = flagging.Flagging(self._ms)
         self._plotting = plotting.Plotting(self._ms)
         self._imaging = imaging.Imaging(self._ms)
+        self._importing = obsdata.Importing(self._ms)
 
     def exists_local_copy(self):
         """Checks if there is a local copy of the Experiment object stored in a local file.
@@ -168,8 +175,9 @@ class Project(object):
             pickle.dump(self, file)
 
     def load(self, path: Optional[Union[Path, str]] = None):
-        """Loads the current Experiment that was stored in a file in the indicated path. If path is None,
-        it assumes the standard path of '.{exp}.obj' where exp is the name of the experiment.
+        """Loads the current Experiment that was stored in a file in the indicated path.
+        If path is None, it assumes the standard path of '.{exp}.obj', where exp is the
+        name of the experiment.
         """
         if path is not None:
             self._local_copy = path
@@ -186,4 +194,3 @@ class Project(object):
 
     def __str__(self):
         return f"<Project {self.projectname}>"
-

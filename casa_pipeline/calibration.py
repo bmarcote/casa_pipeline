@@ -1,9 +1,10 @@
-"""Contains all functions concerning calibration of a VLBI project in MS format within (or out) CASA.
+"""Contains all functions concerning calibration of a VLBI project
+in MS format within (or out) CASA.
 """
 import os
 import shutil
 from pathlib import Path
-import subprocess
+# import subprocess
 from dataclasses import dataclass
 from typing import Optional, Iterable, NoReturn, List, Union, Tuple
 import casatasks

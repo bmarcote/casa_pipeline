@@ -4,11 +4,7 @@ The metadata is obtained from the MS itself.
 """
 from __future__ import annotations
 import os
-import sys
-import pickle
 import glob
-import json
-import subprocess
 import datetime as dt
 import numpy as np
 from pathlib import Path
@@ -16,8 +12,9 @@ from typing import Optional, Iterable, NoReturn, List, Union, Tuple
 from dataclasses import dataclass
 from collections import defaultdict
 from natsort import natsort_keygen
-from pyrap import tables as pt
 import casatasks
+from casatools import msmetadata
+from casatools import table as tb
 from enum import Enum
 from astropy import units as u
 from rich import print as rprint
@@ -343,17 +340,10 @@ class FreqSetup(object):
         return self._channels
 
     @property
-    def frequencies(self) -> np.ndarray:
-        """Returns the frequencies of each channel and subband in a NxM array, with
-        N the number of subbands, and M the number of channels per subband.
-        """
-        return self._freqs
-
-    @property
     def frequency(self) -> u.Quantity:
         """Returns the central frequency of the observation, in a astropy.units.Quantity format.
         """
-        return (np.mean(self.frequencies)*u.Hz).to(u.GHz)
+        return self._frequency.to(u.GHz)
 
     @property
     def bandwidth_per_subband(self) -> u.Quantity:
@@ -373,24 +363,29 @@ class FreqSetup(object):
         """
         return (self.frequency - self.bandwidth/2, self.frequency + self.bandwidth/2)
 
-    def __init__(self, channels: int, frequencies, bandwidth_spw: Union[float, u.Quantity]):
+    def __init__(self, channels: int, n_subbands: int, central_frequency: Union[float, u.Quantity],
+                 bandwidth_spw: Union[float, u.Quantity]):
         """Inputs:
-            - chans : int
+            - channels : int
                 Number of channels per subband.
-            - freqs : array-like
-                Reference frequency for each channel and subband (NxM array, M number
-                of channels per subband.
+            - n_subbands : int
+                Number of subbands.
+            - central_frequency: float or astropy.units.Quantity
+                Central frequency of the observation. If no units are provided, Hz are assumed.
             - bandwidth_spw : float or astropy.units.Quantity
-                Total bandwidth for each subband. If not units are provided, Hz are assumed.
+                Total bandwidth for each subband. If no units are provided, Hz are assumed.
         """
-        self._n_subbands = frequencies.shape[0]
+        assert isinstance(n_subbands, (int, np.int32, np.int64)) and n_subbands > 0, \
+            f"n_subbands {n_subbands} is not a positive integer as expected " \
+            f"(found type {type(n_subbands)})."
         assert isinstance(channels, (int, np.int32, np.int64)), \
-            f"Chans {channels} is not an int as expected (found type {type(channels)})."
+            f"Chans {channels} is not an integer as expected (found type {type(channels)})."
         assert isinstance(bandwidth_spw, float) or isinstance(bandwidth_spw, u.Quantity), \
-            f"Bandwidth {bandwidth_spw} is not a float or Quantity as expected (found {type(bandwidth_spw)})."
-        assert frequencies.shape == (self._n_subbands, channels)
+            f"Bandwidth {bandwidth_spw} is not a float or Quantity as expected " \
+            f"(found {type(bandwidth_spw)})."
         self._channels = int(channels)
-        self._freqs = np.copy(frequencies)
+        self._n_subbands = n_subbands
+        self._frequency = central_frequency
         if isinstance(bandwidth_spw, float):
             self._bandwidth_spw = bandwidth_spw*1e-9*u.GHz
         else:
@@ -548,6 +543,10 @@ class Ms(object):
         self._obsdate = obsdate
 
     @property
+    def params(self) -> dict:
+        return self._params
+
+    @property
     def timerange(self) -> tuple:
         """Returns a tuple with the start and end time of the observation in datetime format.
         """
@@ -567,12 +566,12 @@ class Ms(object):
         self._endtime = endtime
         self.epoch = starttime.date()
 
-    def __init__(self, prefixname: str, observatory_name: Optional[str] = None,
+    def __init__(self, prefixname: str, observatory: Optional[str] = None,
                  cwd: Optional[Union[Path, str]] = None, params: dict = None):
-        assert (prefixname != '') and (isinstance(prefixname, str)), "The prefix name needs to be a non-empty string."
+        assert (prefixname != '') and (isinstance(prefixname, str)), \
+               "The prefix name needs to be a non-empty string."
         self._prefixname = prefixname
-
-        self._observatory_name = observatory_name if observatory_name is not None else ''
+        self._observatory_name = observatory if observatory is not None else ''
         if cwd is None:
             self._cwd = Path('./')
         elif isinstance(cwd, str):
@@ -588,6 +587,7 @@ class Ms(object):
         self._sources = Sources()
         self._antennas = Antennas()
         self._refant = list()
+        self._params = params if params is not None else {}
         if self.msfile.exists():
             try:
                 self.get_metadata_from_ms()
@@ -611,79 +611,123 @@ class Ms(object):
         It may raise KeyError if the type of sources (target, phaseref, fringefinder) are not specified
         in the self.params dict.
         """
-        try:
-            with pt.table(self.msfile.name, readonly=True, ack=False) as ms:
-                with pt.table(ms.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ant:
-                    antenna_col = ms_ant.getcol('NAME')
-                    for ant_name in antenna_col:
-                        ant = Antenna(name=ant_name, observed=True)
-                        self.antennas.add(ant)
+        if not msmetadata.open(str(self.msfile)):
+            return ValueError(f"The MS file {self.msfile} could not be openned.")
 
-                with pt.table(ms.getkeyword('DATA_DESCRIPTION'), readonly=True, ack=False) as ms_spws:
-                    spw_names = ms_spws.getcol('SPECTRAL_WINDOW_ID')
+        antenna_names = msmetadata.antennnanames()
 
-                with pt.table(ms.getkeyword('OBSERVATION'), readonly=True, ack=False) as ms_obs:
-                    telescope_name = ms_obs.getcol('TELESCOPE_NAME')
-                    if self.observatory is None:
-                        self.observatory = ','.join(telescope_name)
-                    elif self.observatory != telescope_name[0]:
-                        rprint("[orange]WARNING: the observatory name in MS does not match the one "
-                               "provided in the project[/orange]")
+        for ant_name in antenna_names:
+            ant = Antenna(name=ant_name, observed=True)
+            self.antennas.add(ant)
 
-                ant_subband = defaultdict(set)
-                print('\nReading the MS to find which antennas actually observed...')
-                with progress.Progress() as progress_bar:
-                    task = progress_bar.add_task("[yellow]Reading MS...", total=len(ms))
-                    for (start, nrow) in tools.chunkert(0, len(ms), 5000):
-                        ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
-                        ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
-                        spws = ms.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
-                        msdata = ms.getcol('DATA', startrow=start, nrow=nrow)
+        spw_names = range(msmetadata.nspw())
+        telescope_name = msmetadata.observatorynames()[0]
+        if self.observatory == '':
+            self._observatory_name = telescope_name
+        elif self.observatory != telescope_name:
+            rprint("[yellow]WARNING: the observatory name in MS does not match the one "
+                   "provided in the project[/yellow]")
 
-                        for ant_i,antenna_name in enumerate(antenna_col):
-                            for spw in spw_names:
-                                cond = np.where((ants1 == ant_i) & (ants2 == ant_i) & (spws == spw))
-                                if not (abs(msdata[cond]) < 1e-5).all():
-                                    ant_subband[antenna_name].add(spw)
+        src_names = msmetadata.fieldnames()
+        src_coords = msmetadata.phasecenter()
+        for a_name, a_coord in zip(src_names, src_coords):
+            if a_name in self.params['target']:
+                a_type = SourceType.target
+            elif a_name in self.params['phaseref']:
+                a_type = SourceType.calibrator
+            elif a_name in self.params['fringefinder']:
+                a_type = SourceType.fringefinder
+            else:
+                a_type = SourceType.other
 
-                        progress_bar.update(task, advance=nrow)
+            self.sources.append(Source(a_name, a_type,
+                                       coord.SkyCoord(ra=src_coords['m0']['value'],
+                                                      dec=src_coords['m1']['value'],
+                                                      unit=(src_coords['m0']['unit'],
+                                                            src_coords['m1']['unit']),
+                                                      equinox=src_coords['refer'])))
 
-                for antenna_name in self.antennas.names:
-                    self.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
-                    self.antennas[antenna_name].observed = len(self.antennas[antenna_name].subbands) > 0
+        timerange = msmetadata.timerangeforobs(0)
+        self.timerange = [tools.mjd2date(timerange['begin']['m0']['value']),
+                          tools.mjd2date(timerange['end']['m0']['value'])]
 
-                with pt.table(ms.getkeyword('FIELD'), readonly=True, ack=False) as ms_field:
-                    src_names = ms_field.getcol('NAME')
-                    src_coords = ms_field.getcol('PHASE_DIR')
-                    for a_name, a_coord in zip(src_names, src_coords):
-                        if a_name in self.params['target']:
-                            a_type = SourceType.target
-                        elif a_name in self.params['phaseref']:
-                            a_type = SourceType.calibrator
-                        elif a_name in self.params['fringefinder']:
-                            a_type = SourceType.fringefinder
-                        else:
-                            a_type = SourceType.other
+        mean_freq = (msmetadata.meanfreq(spw_names[-1]) + msmetadata.meanfreq(0)) / 2.0
+        self.freqsetup = FreqSetup(msmetadata.nchan(0), msmetadata.nspw(), mean_freq,
+                                   msmetadata.bandwidths()[0])
 
-                        self.sources.append(Source(a_name, a_type, coord.SkyCoord(*a_coord[0], unit=(u.rad, u.rad))))
+        nrows = msmetadata.nrows()
 
-                with pt.table(ms.getkeyword('OBSERVATION'), readonly=True, ack=False) as ms_obs:
-                    self.timerange = dt.datetime(1858, 11, 17, 0, 0, 2) + \
-                         ms_obs.getcol('TIME_RANGE')[0]*dt.timedelta(seconds=1)
+        msmetadata.close()
 
-                with pt.table(ms.getkeyword('SPECTRAL_WINDOW'), readonly=True, ack=False) as ms_spw:
-                    self.freqsetup = FreqSetup(ms_spw.getcol('NUM_CHAN')[0],
-                                               ms_spw.getcol('CHAN_FREQ'),
-                                               ms_spw.getcol('TOTAL_BANDWIDTH')[0])
-        except RuntimeError:
-            print(f"WARNING: {self.msfile} not found.")
+        if not tb.open(str(self.msfile)):
+            return ValueError(f"The MS file {self.msfile} could not be openned.")
+
+        ant_subband = defaultdict(set)
+        print('\nReading the MS to find which antennas actually observed...')
+        with progress.Progress() as progress_bar:
+            task = progress_bar.add_task("[yellow]Reading MS...", total=nrows)
+            for (start, nrow) in tools.chunkert(0, nrows, 5000):
+                ants1 = tb.getcol('ANTENNA1', startrow=start, nrow=nrow)
+                ants2 = tb.getcol('ANTENNA2', startrow=start, nrow=nrow)
+                spws = tb.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
+                msdata = tb.getcol('DATA', startrow=start, nrow=nrow)
+
+                for ant_i,antenna_name in enumerate(antenna_names):
+                    for spw in spw_names:
+                        cond = np.where((ants1 == ant_i) & (ants2 == ant_i) & (spws == spw))
+                        if not (abs(msdata[cond]) < 1e-5).all():
+                            ant_subband[antenna_name].add(spw)
+
+                progress_bar.update(task, advance=nrow)
+
+        for antenna_name in self.antennas.names:
+            self.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
+            self.antennas[antenna_name].observed = len(self.antennas[antenna_name].subbands) > 0
 
 
-    def import_lba_fits(self, fitsfile: str):
+    def antennas_in_scan(self, scanno: int):
+        """Returns a list with all antennas that observed the given scan.
+        """
+        if not msmetadata.open(str(self.msfile)):
+            return ValueError(f"The MS file {self.msfile} could not be openned.")
+
+        antenna_names = msmetadata.antennanames()
+        ant_ids = msmetadata.antennasforscan(scanno)
+        msmetadata.close()
+        return [antenna_names[a] for a in ant_ids]
+
+
+    def scans_with_source(self, source_name: str):
+        """Returns a list with the numbers of the scans where the given source was observed.
+        """
+        if not msmetadata.open(str(self.msfile)):
+            return ValueError(f"The MS file {self.msfile} could not be openned.")
+
+        scans = msmetadata.scansforfield(source_name)
+        msmetadata.close()
+        return scans
+
+
+
+    def listobs(self, listfile: Union[Path, str] = None):
+        listfile = self.cwd / f"{self.prefixname}-listobs.log" if listfile is None else listfile
+        casatasks.listobs(self.msfile.name, listfile=str(listfile))
+
+
+class Importing(object):
+    """Class that contains different static functions to import data from different observatories
+    into a MS. Each function would conduct the necessary steps to get a properly prepared MS file.
+    """
+
+    def __init__(self, ms: Ms):
+        self._ms = ms
+
+    def lba_fits(self, fitsfile: str):
         # TODO: LBA import in CASA?
         raise NotImplementedError
 
-    def import_evn_fitsidi(self, fitsidifiles: Union[list, str], ignore_antab=False, ignore_uvflg=False):
+    def evn_fitsidi(self, fitsidifiles: Union[list, str], ignore_antab=False,
+                           ignore_uvflg=False):
         """Imports the provided FITS-IDI files from an EVN observation into a single MS file.
         If checks if the FITS-IDI files already contain the Tsys and GC tables. Otherwise, it
         will first append such information and then import the files.
@@ -706,16 +750,18 @@ class Ms(object):
         # if the information is already there.
         if isinstance(fitsidifiles, str):
             fitsidifiles = sorted(glob.glob(fitsidifiles), key=natsort_keygen())
-        elif not isinstance(fitsidifiles, list):
-            raise TypeError(f"The argument fitsidifiles should be either a list or str. "
+        elif isinstance(fitsidifiles, list):
+            fitsidifiles = sorted(fitsidifiles, key=natsort_keygen())
+        else:
+            raise TypeError("The argument fitsidifiles should be either a list or str. "
                             f"Currently is {fitsidifiles} (type {type(fitsidifiles)})")
 
         for a_fitsidi in fitsidifiles:
             if not os.path.isfile(a_fitsidi):
                 raise FileNotFoundError(f"The file {a_fitsidi} could not be found.")
 
-        antabfile = self.cwd / Path(f"{self.prefixname.lower()}.antab")
-        uvflgfile = self.cwd / Path(f"{self.prefixname.lower()}.uvflg")
+        antabfile = self._ms.cwd / Path(f"{self._ms.prefixname.lower()}.antab")
+        uvflgfile = self._ms.cwd / Path(f"{self._ms.prefixname.lower()}.uvflg")
         if not ignore_antab:
             assert antabfile.exists()
             fitsidi.append_tsys(str(antabfile), fitsidifiles)
@@ -723,14 +769,13 @@ class Ms(object):
 
         if not ignore_uvflg:
             assert uvflgfile.exists()
-            fitsidi.convert_flags(infile=str(self.cwd / Path(f"{self.prefixname.lower()}.uvflg")),
+            fitsidi.convert_flags(infile=str(self._ms.cwd / \
+                                             Path(f"{self._ms.prefixname.lower()}.uvflg")),
                                   idifiles=fitsidifiles,
-                                  outfile=str(self.cwd / Path(f"{self.prefixname.lower()}.flag")))
+                                  outfile=str(self._ms.cwd / \
+                                              Path(f"{self._ms.prefixname.lower()}.flag")))
 
-        casatasks.importfitsidi(vis=str(self.msfile), fitsidifile=fitsidifiles, constobsid=True,
+        casatasks.importfitsidi(vis=str(self._ms.msfile), fitsidifile=fitsidifiles, constobsid=True,
                                 scanreindexgap_s=8.0, specframe='GEO')
-        self.get_metadata_from_ms()
+        self._ms.get_metadata_from_ms()
 
-    def listobs(self, listfile: Union[Path, str] = None):
-        listfile = self.cwd / f"{self.prefixname}-listobs.log" if listfile is None else listfile
-        casatasks.listobs(self.msfile.name, listfile=str(listfile))

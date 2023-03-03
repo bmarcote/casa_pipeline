@@ -1,5 +1,6 @@
 import sys
 import subprocess
+import datetime
 from typing import Iterable, Union, Optional, Tuple
 
 
@@ -52,3 +53,15 @@ def shell_command(command: str, parameters: Optional[Union[str, Iterable[str]]] 
 
     return ' '.join(full_shell_command), ''.join(output_lines)
 
+def mjd2date(mjd: float) -> datetime.datetime:
+    """Returns the datetime for the given MJD date.
+    """
+    origin = datetime.datetime(1858, 11, 17)
+    return origin + datetime.timedelta(mjd)
+
+
+def date2mjd(date: datetime.datetime) -> float:
+    """Returns the MJD day associated to the given datetime.
+    """
+    origin = datetime.datetime(1858, 11, 17)
+    return  (date-origin).days + (date-origin).seconds/86400.0
