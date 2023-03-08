@@ -3,6 +3,7 @@
 The metadata is obtained from the MS itself.
 """
 import pickle
+import datetime as dt
 from pathlib import Path
 from typing import Optional, Union # Iterable, NoReturn, List, Tuple
 from . import obsdata
@@ -36,6 +37,38 @@ class Project(object):
     def observatory(self, observatory_name: str):
         assert isinstance(observatory_name, str)
         self._observatory = observatory_name
+
+    @property
+    def epoch(self) -> dt.time:
+        return self._ms.epoch
+
+    @property
+    def timerange(self) -> tuple:
+        return self._ms.timerange
+
+    @property
+    def antennas(self) -> obsdata.Antennas:
+        return self._ms.antennas
+
+    @property
+    def refant(self) -> list:
+        return self._ms.refant
+
+    @refant.setter
+    def refant(self, new_refant):
+        """Defines the antenna to use as reference during calibration.
+        It can be either a str (with a single antenna, or comma-separated antennas),
+        or a list with the antenna(s) to use as reference.
+        """
+        self._ms.refant = new_refant
+
+    @property
+    def freqsetup(self) -> obsdata.FreqSetup:
+        return self._ms.freqsetup
+
+    @property
+    def sources(self) -> obsdata.Sources:
+        return self._ms.sources
 
     @property
     def logdir(self) -> Path:
@@ -118,7 +151,7 @@ class Project(object):
                 The default directory where the pipeline will run, search for and create the files.
         """
         assert (projectname != '') and (isinstance(projectname, str)), \
-            "The project name needs to be a non-empty string."
+               "The project name needs to be a non-empty string."
         self._projectname = projectname
         self._observatory = observatory
         # logpath = Path("./logs")
@@ -137,32 +170,41 @@ class Project(object):
         self._logdir = self.cwd / 'log'
         self._caldir = self.cwd / 'caltables'
         self._outdir = self.cwd / 'results'
+        self._args = {}
 
         for a_dir in (self.cwd, self.logdir, self.caldir, self.outdir):
             a_dir.mkdir(exist_ok=True)
+
 
         self._local_copy = self.cwd / Path(f"{self.projectname.lower()}.obj")
         if self.exists_local_copy():
             self = self.load(self._local_copy)
 
-        # self._last_step = None
-        if params is None:
-            self._args = {}
-        else:
+        if params is not None:
             self._args = params
 
-        self._ms = obsdata.Ms(projectname, cwd)
-        # TODO: differentiate as function of the observatory
-        self._calibration = calibration.Calibration(self._ms)
-        self._flagging = flagging.Flagging(self._ms)
-        self._plotting = plotting.Plotting(self._ms)
-        self._imaging = imaging.Imaging(self._ms)
-        self._importing = obsdata.Importing(self._ms)
+        if observatory != '':
+            self._observatory = observatory
+
+        if not self.exists_local_copy():
+            self._ms = obsdata.Ms(projectname, observatory=self.observatory, cwd=self.cwd,
+                                  params=self._args)
+            # TODO: differentiate as function of the observatory
+            self._calibration = calibration.Calibration(self._ms, self.caldir)
+            self._flagging = flagging.Flagging(self._ms)
+            self._plotting = plotting.Plotting(self._ms)
+            self._imaging = imaging.Imaging(self._ms)
+            self._importing = obsdata.Importing(self._ms)
+
+        # self._last_step = None
+        self.store()
+
 
     def exists_local_copy(self):
         """Checks if there is a local copy of the Experiment object stored in a local file.
         """
         return self._local_copy.exists()
+
 
     def store(self, path : Optional[Union[Path, str]] = None):
         """Stores the current Experiment into a file in the indicated path. If not provided,

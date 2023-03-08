@@ -21,9 +21,9 @@ class Flagging(object):
         if isinstance(flagfile, str):
             flagfile = Path(flagfile)
 
-        flagfile = str(self._ms.cwd / f"{self._ms.projectname.lower()}.flag") if flagfile is None else flagfile
+        flagfile = (self._ms.cwd / f"{self._ms.prefixname.lower()}.flag") if flagfile is None else flagfile
         assert flagfile.exists(), f"The flagfile {flagfile} cannot be found."
-        casatasks.flagdata(vis=str(self._ms.msfile), inpfile=flagfile,
+        casatasks.flagdata(vis=str(self._ms.msfile), inpfile=str(flagfile),
                            reason='any', action='apply', flagbackup=False, savepars=False)
         casatasks.flagmanager(vis=str(self._ms.msfile), mode='save', versionname=f"flags from {flagfile}",
                               comment='A-priori flags prior to any calibration.')
@@ -62,9 +62,10 @@ class Flagging(object):
             assert ant in self._ms.antennas.names, f"The antenna {ant} did not participate in this observation."
 
         casatasks.flagdata(vis=str(self._ms.msfile), mode='quack',
-                           antennas=','.join(antennas), quackinterval=quack_interval_s, flagbackup=False)
+                           antenna=','.join(antennas), quackinterval=quack_interval_s, flagbackup=False)
 
-    def flag_tfcrop(self, timecutoff=6.0, freqcutoff=5.0, timedevscale=5.0, freqdevscale=5.0):
+
+    def tfcrop(self, timecutoff=6.0, freqcutoff=5.0, timedevscale=5.0, freqdevscale=5.0):
         """Runs flagdata with the tfcrop option.
         In principle it should work fine for EVN data as long as the data are already calibrated.
         """
@@ -80,6 +81,6 @@ class Flagging(object):
         If you have a costumized AOflagger strategy file, you can use it.
         """
         if strategy_file is None:
-            tools.shell_command("aoflagger", str(self._ms.msfile))
+            tools.shell_command("aoflagger", [str(self._ms.msfile)])
         else:
             tools.shell_command("aoflagger", ["-strategy", strategy_file, str(self._ms.msfile)])
