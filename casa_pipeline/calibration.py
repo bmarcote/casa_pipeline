@@ -1,5 +1,5 @@
 """Contains all functions concerning calibration of a VLBI project
-in MS format within (or out) CASA.
+ii MS format within (or out) CASA.
 """
 import os
 import shutil
@@ -7,6 +7,7 @@ from pathlib import Path
 # import subprocess
 from dataclasses import dataclass
 from typing import Optional, Iterable, Union
+from rich import print as rprint
 import casatasks
 from casatasks.private import tec_maps
 from casatools import table as tb
@@ -37,7 +38,6 @@ class CallibEntries():
                                                    "should be a CallibEntry object."
         if new_entry.name in self.names:
             self.__setitem__(new_entry.name, new_entry)
-            # self[new_entry.name] = new_entry   # I think this should work similarly. TODO: check
         else:
             self._entries.append(new_entry)
 
@@ -74,7 +74,7 @@ class CallibEntries():
         self._entries[self.names.index(name)] = value
 
     def __delitem__(self, entry_name: str):
-        return self._entries.remove(self.names.index(entry_name))
+        return self._entries.pop(self.names.index(entry_name))
 
     def __iter__(self):
         return self._entries.__iter__()
@@ -126,6 +126,19 @@ class Callib(object):
     def associated_parameters(self, name: str):
         return self._entries[name].parameters
 
+    def gaintables(self) -> list:
+        return self.entries.caltables
+
+    def interps(self) -> list:
+        interp_params = []
+        for acal in self.entries.parameters:
+            temp = [atemp.replace("'", "").split('=') for atemp in acal.split(' ') if '=' in atemp]
+            temp = {atemp[0]: atemp[1] for atemp in temp}
+            interp_params.append(f"{temp['tinterp'] if 'tinterp' in temp else 'linear'}," \
+                                 f"{temp['finterp'] if 'finterp' in temp else 'linear'}")
+
+        return interp_params
+
     def new_entry(self, name: str, caltable: str, parameters: str):
         """Adds a new callib entry to the list of associated entries.
         If there is already an entry with the same name, it will replace it.
@@ -157,9 +170,10 @@ class Callib(object):
                 if os.path.isdir(caltable):
                     shutil.rmtree(caltable)
 
-            del self._entries[name]
+            self._entries.__delitem__(name)
 
         self.update_file()
+
 
     def update_file(self):
         with open(self.filename, 'w') as callib_file:
@@ -169,6 +183,23 @@ class Callib(object):
                     callib_file.write(f"{a_step.parameters}\n")
                 else:
                     callib_file.write(f"caltable='{a_step.caltable}' {a_step.parameters}\n")
+
+    def import_from_file(self, filename: Optional[Union[Path, str]] = None):
+        if filename is None:
+            filename = self.filename
+
+        self._entries = CallibEntries()
+        with open(self.filename, 'r') as callib_file:
+            ongoing = False
+            for aline in callib_file.readlines():
+                if len(aline) > 0 and aline.strip()[0] == '#':
+                    entry_name, ongoing = aline.strip()[1:].strip(), True
+                elif ongoing:
+                    entry_caltable, *entry_params = aline.split(' ')
+                    entry_caltable = entry_caltable.strip().replace("'", "").split('=')[1]
+                    self.entries.add(CallibEntry(entry_name, entry_caltable,
+                                                 ' '.join(entry_params).strip()))
+                    ongoing = False
 
 
 def remove_if_exists(a_table: Union[Path, str]):
@@ -190,16 +221,14 @@ def get_spw_global_fringe(caltable: Path) -> int:
     This function reads the generated calibration table and returns the number of the spw where
     the solutions where actually stored.
     """
-    a_table = tb.table(str(caltable))
+    a_table = tb(str(caltable))
     try:
         a_table.open(str(caltable))
-        try:
-            a_table.open(tb.getkeyword('SPECTRAL_WINDOW').replace('Table: ', ''))
-            the_spw = int(a_table.getcol('MEAS_FREQ_REF')[0])
-        finally:
-            tb.close()
+        if not a_table.open(a_table.getkeyword('SPECTRAL_WINDOW').replace('Table: ', '')):
+            raise RuntimeError(f"Could not open the {caltable}/SPECTRAL_WINDOW calibration table.")
+        the_spw = int(a_table.getcol('MEAS_FREQ_REF')[0])
     finally:
-        tb.close()
+        a_table.close()
 
     return the_spw
 
@@ -221,6 +250,21 @@ class Calibration(object):
         """
         return self._callib
 
+    def _verify(self, files: list):
+        """Verifies that the given list of files (must contain a list of Path objects), exists.
+        If they cannot be found, it will raise FileNotFoundError.
+        """
+        for a_file in files:
+            if not a_file.exists():
+                rprint("[bold red] -- Error --[/bold red]")
+                self._ms.logger.error(f"[bold red]{a_file} was not created during " \
+                                      "a_priori_calibration.[/bold red]")
+                raise FileNotFoundError(f"The calibration table {a_file} should have been "
+                                        "generated but does not exist.")
+
+        return True
+
+
     def __init__(self, ms: obsdata.Ms, caldir: Union[str, Path]):
         self._ms = ms
         self._caldir = caldir
@@ -234,18 +278,19 @@ class Calibration(object):
         caltsys = self.caldir / f"{str(self._ms.prefixname).lower()}.tsys"
         calgc = self.caldir / f"{str(self._ms.prefixname).lower()}.gc"
 
+        self._ms.logger.info(f"Running calibration.a_priori_calibration (replace={replace})")
         if replace:
             remove_if_exists(caltsys)
             remove_if_exists(calgc)
 
         if not caltsys.exists():
-            print(f"Generating Tsys calibration table {caltsys}.")
+            print(f"Generating the Tsys calibration table {caltsys}.")
             casatasks.gencal(vis=str(self._ms.msfile), caltable=str(caltsys),
                              caltype='tsys', uniform=False)
             self.callib.new_entry(name='tsyscal', caltable=str(caltsys), \
-                                  parameters=f"caltable='{str(caltsys)}' tinterp='nearest' " \
-                                             "finterp='nearest'")
+                                  parameters="tinterp='nearest' finterp='nearest'")
             print(f"Tsys calibration table {caltsys} properly generated.")
+            self._ms.logger.debug(f"New Calibration Table: {caltsys}.")
         else:
             print(f"{caltsys} (Tsys corrections) already exists. It will not be generated again.")
 
@@ -253,12 +298,14 @@ class Calibration(object):
             print(f"Generating GC calibration table {calgc}.")
             casatasks.gencal(vis=str(self._ms.msfile), caltable=str(calgc), caltype='gc')
             self.callib.new_entry(name='gccal', caltable=str(calgc),
-                                  parameters=f"caltable='{calgc}' tinterp='nearest' " \
-                                             "finterp='nearest'")
+                                  parameters="tinterp='nearest' ")
             print(f"GC calibration table {calgc} properly generated.")
+            self._ms.logger.debug(f"New Calibration Table: {calgc}.")
         else:
             print(f"{calgc} (Gain Curve corrections) already exists. "
                   "It will not be generated again.")
+
+        self._verify([caltsys, calgc])
 
 
     def accor(self, replace=False):
@@ -281,12 +328,13 @@ class Calibration(object):
                                 caltable=accor_caltable_smooth, smoothtype='median',
                                 smoothtime=1800.0)
             self.callib.new_entry(name='accor', caltable=str(accor_caltable_smooth),
-                                  parameters=f"caltable='{accor_caltable_smooth}' " \
-                                             "tinterp='nearest'  finterp='linear'")
+                                  parameters="tinterp='nearest'  finterp='linear'")
             print(f"ACCOR calibration table {accor_caltable_smooth} properly generated.")
         else:
             print(f"{accor_caltable_smooth} (ACCOR corrections) already exists. " \
                   "It will not be generated again.")
+
+        self._verify([accor_caltable_smooth, ])
 
 
     def ionospheric_corrections(self, replace=False):
@@ -306,11 +354,13 @@ class Calibration(object):
             casatasks.gencal(vis=str(self._ms.msfile), caltable=str(caltec),
                              infile=f"{imtec}.IGS_TEC.im", caltype='tecim')
             self.callib.new_entry(name='teccor', caltable=str(caltec),
-                                  parameters=f"caltable='{caltec}'")
+                                  parameters="")
             print(f"Ionospheric TEC correction {caltec} properly generated.")
         else:
             print(f"{caltec} (ionospheric corrections) already exists. "
                   "It will not be generated again.")
+
+        self._verify([caltec, imtec])
 
 
     def get_sbd_timerange(self, interval='2min') -> str:
@@ -323,21 +373,54 @@ class Calibration(object):
           3) the one with higher amplitudes in all baselines (checking the min amplitude).
         """
         #TODO: implement or pass it by the user
-        if self._sbd_timerange is not None:
-            return self._sbd_timerange
-        elif 'calibration' in self._ms.params and 'sbd_timerange' in self._ms.params['calibration']:
+        if 'calibration' in self._ms.params and 'sbd_timerange' in self._ms.params['calibration']:
             self._sbd_timerange = self._ms.params['calibration']['sbd_timerange']
+            self._ms.debug(f"sbd time range (from inputs): {self._sbd_timerange}.")
+            assert self._sbd_timerange is not None, "'calibration' > 'sbd_timerange' in the input" \
+                                                " params file should contain a time range."
+            return self._sbd_timerange
+        elif self._sbd_timerange is not None:
+            self._ms.debug(f"sbd time range (stored): {self._sbd_timerange}.")
             return self._sbd_timerange
         else:
-            # raise NotImplementedError
-            try:
-                m = msmd(str(self._ms.msfile))
-                if not m.open(str(self._ms.msfile)):
-                    return ValueError(f"The MS file {self._ms.msfile} could not be openned.")
-            finally:
-                m.close()
+            raise NotImplementedError
+            # TODO: check scans with all antennas on the fringe finder
+            # try:
+            #     m = msmd(str(self._ms.msfile))
+            #     if not m.open(str(self._ms.msfile)):
+            #         return ValueError(f"The MS file {self._ms.msfile} could not be openned.")
+            # finally:
+            #     m.close()
+            #
+            # self._ms.debug(f"sbd time range (from MS): {self._sbd_timerange}.")
 
 
+
+    def prioritize_ref_antennas(self) -> list:
+        """Given that some calibration steps (like fringe-fit) will break if there are no data
+        for the given reference antenna, this will give the full list of available antennas,
+        sorted with the reference antennas first, and later a manually-prioritized list.
+        """
+        full_antenna_list = ['EF', 'YS', 'GB', 'O8', 'JB', 'LA', 'NL', 'SR', 'MC']
+        sorted_antenna_list = list(self._ms.refant)
+
+        # First priotizes the antennas with full bandwidth
+        best_ants = [ant.name for ant in self._ms.antennas if \
+                (len(self._ms.antennas[ant.name].subbands) == self._ms.freqsetup.n_subbands) \
+                and ant.observed and (ant.name not in sorted_antenna_list)]
+
+        rest_ants = [ant for ant in self._ms.antennas.observed if (ant not in best_ants) and \
+                (ant not in sorted_antenna_list)]
+
+        for ant in full_antenna_list:
+            if ant in best_ants:
+                sorted_antenna_list.append(ant)
+                best_ants.remove(ant)
+
+        sorted_antenna_list += best_ants
+        sorted_antenna_list += rest_ants
+        self._ms.debug(f"Prioritized reference antennas: {', '.join(sorted_antenna_list)}.")
+        return sorted_antenna_list
 
 
     def main_calibration(self, replace=False):
@@ -360,41 +443,59 @@ class Calibration(object):
             print("No instrumental delay calibration performed as the table "
                   f"{cals['sbd']} already exists.")
         else:
+            rprint("[bold]Running fringefit for instrumental delay correction.[/bold]")
+            # TODO: this is a patch because currently fringe-fit breaks with callib.... :-(
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
                                 timerange=self.get_sbd_timerange(),
                                 solint='inf', zerorates=True,
-                                refant=','.join(self._ms.refant), minsnr=50, docallib=True,
-                                callib=str(self.callib.filename), corrdepflags=True, parang=True)
+                                refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
+                                gaintable=self.callib.gaintables(),
+                                interp=self.callib.interps(),
+                                corrdepflags=True, parang=True)
+            # casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
+            #                     timerange=self.get_sbd_timerange(),
+            #                     solint='inf', zerorates=True,
+            #                     refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
+            #                     docallib=True,
+            #                     callib=str(self.callib.filename), corrdepflags=True, parang=True)
             self.callib.new_entry(name='sbd', caltable=str(cals['sbd']),
-                                  parameters=f"caltable='{cals['sbd']}' tinterp='nearest'")
+                                  parameters="tinterp='nearest'")
+
+        self._verify([cals['sbd']])
 
         if cals['mbd'].exists():
             print("No multi-band delay calibration performed as the table "
                   f"{cals['mbd']} already exists.")
         else:
+            rprint("[bold]Running fringefit for multi-band delay correction.[/bold]")
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['mbd']),
-                                field=','.join(self._ms.calibrators), solint='inf', zerorates=False,
-                                refant=','.join(self._ms.refant), combine='spw', minsnr=5,
-                                docallib=True, callib=str(self.callib.filename), corrdepflags=True,
+                                field=','.join(self._ms.sources.all_calibrators.names),
+                                solint='inf', zerorates=False,
+                                refant=','.join(self.prioritize_ref_antennas()), combine='spw',
+                                minsnr=3, gaintable=self.callib.gaintables(),
+                                interp=self.callib.interps(), corrdepflags=True,
                                 parang=True)
             spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd']))
             self.callib.new_entry(name='mbd', caltable=str(cals['mbd']),
-                                  parameters=f"caltable='{cals['mbd']}' tinterp='linear' " \
+                                  parameters="tinterp='linear' " \
                                              f"spwmap={self._ms.freqsetup.n_subbands*[spw_with_solutions]}")
+
+        self._verify([cals['mbd']])
 
         if cals['bp'].exists():
             print(f"No bandpass calibration performed as the table {cals['bp']} already exists.")
         else:
+            rprint("[bold]Running bandpass calibration.[/bold]")
             casatasks.bandpass(vis=str(self._ms.msfile),
-                               field=','.join(self._ms.sources.fringe_finders.names),
+                               field=','.join(self._ms.sources.fringe_finders.names), fillgaps=16,
                                combine='scan', caltable=str(cals['bp']), docallib=True,
-                               callib=str(self.callib.filename), solnorm=True, solint='inf', fillgaps=16,
+                               callib=str(self.callib.filename), solnorm=True, solint='inf',
                                refant=','.join(self._ms.refant), bandtype='B', parang=True)
             self.callib.new_entry(name='bandpass', caltable=str(cals['bp']),
-                                  parameters=f"caltable='{cals['bp']}' tinterp='linear' "
-                                             "finterp='linear'")
+                                  parameters="tinterp='linear' finterp='linear'")
 
-    # TODO: between std calibration and recalibration a flagging with TRFLG or whatever should run
+        self._verify([cals['bp']])
+
 
     def recalibration(self, replace=False):
         """Runs the main calibration of the data:
@@ -414,32 +515,41 @@ class Calibration(object):
             print("No second instrumental delay calibration performed as the table "
                   f"{cals['sbd2']} already exists.")
         else:
+            rprint("[bold]Running fringefit for a second instrumental delay correction.[/bold]")
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd2']),
                                 timerange=self.get_sbd_timerange(), solint='inf', zerorates=True,
-                                refant=','.join(self._ms.refant), minsnr=50, docallib=True,
-                                callib=str(self.callib.filename), corrdepflags=True, parang=True)
+                                refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
+                                gaintable=self.callib.gaintables(),
+                                interp=self.callib.interps(), corrdepflags=True, parang=True)
             self.callib.new_entry(name='sbd2', caltable=str(cals['sbd2']),
-                                  parameters=f"caltable='{cals['sbd2']}' tinterp='nearest'")
+                                  parameters="tinterp='nearest'")
+
+        self._verify([cals['sbd2']])
 
         if cals['mbd2'].exists():
             print("No second multi-band delay calibration performed as the table "
                   f"{cals['mbd2']} already exists.")
         else:
+            rprint("[bold]Running fringefit for a second multi-band delay correction.[/bold]")
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['mbd2']),
-                                field=','.join(self._ms.calibrators), solint='inf', zerorates=False,
-                                refant=','.join(self._ms.refant), combine='spw', minsnr=5,
-                                docallib=True,
-                                callib=str(self.callib.filename), corrdepflags=True, parang=True)
-            spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd2']))
-            self.callib.new_entry(name='mbd2', caltable=str(cals['mbd2']),
-                                  parameters=f"caltable='{cals['mbd2']}' tinterp='linear' " \
-                                             f"spwmap={self._ms.freqsetup.n_subbands*[spw_with_solutions]}")
+                                field=','.join(self._ms.sources.all_calibrators.names),
+                                solint='inf', zerorates=False, minsnr=5,
+                                refant=','.join(self.prioritize_ref_antennas()), combine='spw',
+                                gaintable=self.callib.gaintables(),
+                                interp=self.callib.interps(), corrdepflags=True, parang=True)
+        spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd2']))
+        self.callib.new_entry(name='mbd2', caltable=str(cals['mbd2']),
+                              parameters="tinterp='linear' " \
+                                         f"spwmap={self._ms.freqsetup.n_subbands*[spw_with_solutions]}")
+
+        self._verify([cals['mbd2']])
 
 
     def apply_calibration(self):
         """Applies the current calibration by using the tables written in the callib.
         """
-        casatasks.applycal(vis=str(self._ms.msfile), docallib=True, callib=str(self.callib.filename), parang=True)
+        casatasks.applycal(vis=str(self._ms.msfile), docallib=True,
+                           callib=str(self.callib.filename), parang=True)
 
 
 

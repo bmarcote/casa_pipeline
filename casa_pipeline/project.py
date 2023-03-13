@@ -3,9 +3,16 @@
 The metadata is obtained from the MS itself.
 """
 import pickle
+import logging
 import datetime as dt
 from pathlib import Path
 from typing import Optional, Union # Iterable, NoReturn, List, Tuple
+# tomli was introduced in the standard library as tomllib in Python 3.11
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
 from . import obsdata
 from . import calibration
 from . import flagging
@@ -55,12 +62,15 @@ class Project(object):
         return self._ms.refant
 
     @refant.setter
-    def refant(self, new_refant):
+    def refant(self, new_refant: Union[str, list]):
         """Defines the antenna to use as reference during calibration.
         It can be either a str (with a single antenna, or comma-separated antennas),
         or a list with the antenna(s) to use as reference.
         """
-        self._ms.refant = new_refant
+        if isinstance(new_refant, list):
+            self._ms.refant = new_refant
+        elif isinstance(new_refant, str):
+            self._ms.refant = [ant.strip() for ant in new_refant.split(',')]
 
     @property
     def freqsetup(self) -> obsdata.FreqSetup:
@@ -109,6 +119,10 @@ class Project(object):
         self._last_step = last_step
 
     @property
+    def logger(self) -> logging.Logger:
+        return self._logger
+
+    @property
     def ms(self):
         return self._ms
 
@@ -132,8 +146,9 @@ class Project(object):
     def importdata(self):
         return self._importing
 
-    def __init__(self, projectname: str, observatory: Optional[str] = '', params: dict = None,
-                 cwd: Optional[Union[Path, str]] = None):
+    def __init__(self, projectname: str, observatory: Optional[str] = '',
+                 params: Union[dict, str, Path] = None,
+                 cwd: Optional[Union[Path, str]] = None, logging_level=logging.INFO):
         """Initializes an EVN experiment with the given name.
 
         Inputs:
@@ -144,8 +159,10 @@ class Project(object):
                 Name of the observatory associated to this project.
                 If not specified, it will be read from the MS when exists.
 
-            params : dict  [optional]
+            params : dict/Path/str  [optional]
                 Default parameters read from the pipeline input file and are loaded here.
+                If it is a Path or str, it is assumed to be the file name containing the
+                input parameters.
 
             cwd : Path or str  [optional. Default = $PWD]
                 The default directory where the pipeline will run, search for and create the files.
@@ -154,10 +171,11 @@ class Project(object):
                "The project name needs to be a non-empty string."
         self._projectname = projectname
         self._observatory = observatory
-        # logpath = Path("./logs")
-        # logpath.mkdir(parents=True, exist_ok=True)
-        # self._logs = {'dir': logpath, 'file': Path("./processing.log)")}
-        # if 'cwd' in params:
+        logging.basicConfig(level=logging_level, format="%(asctime)s %(levelname)s: %(message)s",
+                            datefmt="%Y-%m-%d %H:%M")
+        self._logger = logging.getLogger(self.projectname)
+        self.logger.debug(f"Initializing Project '{self.projectname}' from observatory " \
+                          f"'{self.observatory}'.")
         if cwd is None:
             self._cwd = Path('./')
         elif isinstance(cwd, str):
@@ -170,6 +188,7 @@ class Project(object):
         self._logdir = self.cwd / 'log'
         self._caldir = self.cwd / 'caltables'
         self._outdir = self.cwd / 'results'
+        self._last_step = None
         self._args = {}
 
         for a_dir in (self.cwd, self.logdir, self.caldir, self.outdir):
@@ -178,23 +197,35 @@ class Project(object):
 
         self._local_copy = self.cwd / Path(f"{self.projectname.lower()}.obj")
         if self.exists_local_copy():
-            self = self.load(self._local_copy)
+            self.load(self._local_copy)
 
         if params is not None:
-            self._args = params
+            if isinstance(params, dict):
+                self._args = params
+            elif isinstance(params, Path) or isinstance(params, str):
+                with open(params, "rb") as fp:
+                    self._args = tomllib.load(fp)
 
         if observatory != '':
             self._observatory = observatory
+            self.logger.debug(f"Observatory changed to {self.observatory}.")
 
         if not self.exists_local_copy():
+            self.logger.debug("Project Initializing from scratch.")
             self._ms = obsdata.Ms(projectname, observatory=self.observatory, cwd=self.cwd,
-                                  params=self._args)
+                                  params=self._args, logger=self._logger)
             # TODO: differentiate as function of the observatory
             self._calibration = calibration.Calibration(self._ms, self.caldir)
             self._flagging = flagging.Flagging(self._ms)
             self._plotting = plotting.Plotting(self._ms)
             self._imaging = imaging.Imaging(self._ms)
             self._importing = obsdata.Importing(self._ms)
+        elif params is not None:
+            self._calibration._ms._params = self._args
+            self._flagging._ms._params = self._args
+            self._plotting._ms._params = self._args
+            self._imaging._ms._params = self._args
+            self._importing._ms._params = self._args
 
         # self._last_step = None
         self.store()
@@ -216,7 +247,10 @@ class Project(object):
         with open(self._local_copy, 'wb') as file:
             pickle.dump(self, file)
 
-    def load(self, path: Optional[Union[Path, str]] = None):
+        self.logger.debug(f"Local copy of {self.projectname} stored at {self._local_copy}.")
+
+
+    def load(self, path: Optional[Union[Path, str]] = None) -> bool:
         """Loads the current Experiment that was stored in a file in the indicated path.
         If path is None, it assumes the standard path of '.{exp}.obj', where exp is the
         name of the experiment.
@@ -227,7 +261,18 @@ class Project(object):
         with open(self._local_copy, 'rb') as file:
             obj = pickle.load(file)
 
-        return obj
+        self._observatory = obj._observatory
+        self._logger = obj._logger
+        self._args = obj._args
+        self._last_step = obj._last_step
+        self._ms = obj._ms
+        self._calibration = obj._calibration
+        self._flagging = obj._flagging
+        self._plotting = obj._plotting
+        self._imaging = obj._imaging
+        self._importing = obj._importing
+        self.logger.info(f"Loaded Project object from the stored local copy at {self._local_copy}.")
+        return True
 
     def __repr__(self, *args, **kwargs):
         rep = super().__repr__(*args, **kwargs)

@@ -8,7 +8,8 @@ def chunkert(counter: int, max_length: int, increment: int) -> Tuple[int, int]:
     """Silly function to select a subset of an interval in
        [counter, counter + increment] : 0 < counter < max_length.
 
-    Yields the tuple (counter, + interval_increment) : interval_increment = min(increment, max_length - counter))
+    Yields the tuple (counter, + interval_increment) :
+                        interval_increment = min(increment, max_length - counter))
     """
     while counter < max_length:
         this_increment = min(increment, max_length - counter)
@@ -22,8 +23,19 @@ def percentage(x, y):
     return (x / y)*100.0
 
 
-def shell_command(command: str, parameters: Optional[Union[str, Iterable[str]]] = None, shell: bool = True,
-                  bufsize=-1, stdout=None, stderr=subprocess.STDOUT):
+def log_it(logger):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            logger.debug(f"{func.__name__}({', '.join(args)}{', ' if len(kwargs) > 0 else ''}" \
+                         f"{', '.join([k+'='+v for k,v in kwargs.items()])})")
+
+            return func(*args, **kwargs)
+
+        return wrapper
+
+
+def shell_command(command: str, parameters: Optional[Union[str, Iterable[str]]] = None,
+                  shell: bool = True, bufsize=-1, stdout=None, stderr=subprocess.STDOUT):
     """Runs the provided command in the shell with some arguments if necessary.
     Returns the output of the command, assuming a UTF-8 encoding, or raises ValueError
     if fails. Parameters must be either a single string or a list, if provided.

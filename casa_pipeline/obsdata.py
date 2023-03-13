@@ -6,10 +6,13 @@ from __future__ import annotations
 import os
 import glob
 import shutil
+import logging
 import datetime as dt
 import numpy as np
 from enum import IntEnum
 from pathlib import Path
+from concurrent import futures
+from threading import Lock
 from typing import Optional, Iterable, NoReturn, List, Union, Tuple
 from dataclasses import dataclass
 from collections import defaultdict
@@ -100,6 +103,35 @@ class Source(object):
         """Type of the source (SorceType object).
         """
         return self._type
+
+    @type.setter
+    def type(self, new_type: Union[str, SourceType]):
+        """Sets the type of the given source.
+
+        new_type : [str/SourceType]
+            The new type for the given source. If string, it needs to match
+            'target', 'phaseref', 'fringefinder' or 'other'.
+            Otherwise, it is expected to be a 'SourceType' parameter.
+        """
+        if isinstance(new_type, SourceType):
+            self._type =new_type
+        elif isinstance(new_type, str):
+            if new_type == 'target':
+                self._type = SourceType.target
+            elif new_type == 'phaseref':
+                self._type = SourceType.calibrator
+            elif new_type == 'fringefinder':
+                self._type = SourceType.fringefinder
+            elif new_type == 'other':
+                self._type = SourceType.other
+            else:
+                raise ValueError(f"The new type given for the source {self.name} " \
+                                 f"({new_type}) has an unexpected value, " \
+                                 f"while 'target'/'phaseref'/'fringefinder'/'other' were expected.")
+        else:
+            raise ValueError(f"The new type given for the source {self.name} " \
+                             f"({new_type}) has an unexpected type {type(new_type)}, " \
+                             "while str/SourceType were expected.")
 
     @property
     def model(self) -> Path:
@@ -203,10 +235,17 @@ class Sources(object):
         return Sources([s for s in self._sources if s.type == SourceType.target])
 
     @property
-    def calibrators(self) -> Sources:
+    def phase_calibrators(self) -> Sources:
         """Returns the phase calibrator sources.
         """
         return Sources([s for s in self._sources if s.type == SourceType.calibrator])
+
+    @property
+    def all_calibrators(self) -> Sources:
+        """Returns all calibrator sources (including phase calibrators and fringe finders).
+        """
+        return Sources([s for s in self._sources if (s.type == SourceType.calibrator) or \
+                       (s.type == SourceType.fringefinder)])
 
     @property
     def other_sources(self) -> Sources:
@@ -339,7 +378,7 @@ class Antennas(object):
 
     def __repr__(self):
         return "Antennas:\n" \
-               f"([{', '.join([ant if ant in self.observed else '['+ant+']' for ant in self.names])})"
+           f"([{', '.join([ant if ant in self.observed else '['+ant+']' for ant in self.names])})"
 
     def json(self):
         """Returns a dict with all attributes of the object.
@@ -551,8 +590,8 @@ class Ms(object):
     @refant.setter
     def refant(self, new_refant):
         """Defines the antenna to use as reference during calibration.
-        It can be either a str (with a single antenna, or comma-separated antennas), or a list with the
-        antenna(s) to use as reference.
+        It can be either a str (with a single antenna, or comma-separated antennas),
+        or a list with the antenna(s) to use as reference.
         """
         if isinstance(new_refant, str):
             new_refant = [ant.strip() for ant in new_refant.split(',')]
@@ -560,7 +599,8 @@ class Ms(object):
             raise TypeError("The antenna introduced must be either a  str or list")
 
         for antenna in new_refant:
-            assert antenna in self.antennas.names, f"Antenna {antenna} for refant is not in the array."
+            assert antenna in self.antennas.names, \
+                   f"Antenna {antenna} for refant is not in the array."
         self._refant = list(new_refant)
 
     @property
@@ -612,8 +652,13 @@ class Ms(object):
         self._endtime = endtime
         self.epoch = starttime.date()
 
+    @property
+    def logger(self) -> logging.Logger:
+        return self._logger
+
     def __init__(self, prefixname: str, observatory: Optional[str] = None,
-                 cwd: Optional[Union[Path, str]] = None, params: dict = None):
+                 cwd: Optional[Union[Path, str]] = None, params: dict = None,
+                 logger: Optional[logging.Logger] = None):
         assert (prefixname != '') and (isinstance(prefixname, str)), \
                "The prefix name needs to be a non-empty string."
         self._prefixname = prefixname
@@ -633,6 +678,10 @@ class Ms(object):
         self._sources = Sources()
         self._antennas = Antennas()
         self._params = params if params is not None else {}
+        if logger is None:
+            self._logger = logging.getLogger(f"Ms-{self.prefixname}")
+        else:
+            self._logger = logger
 
         if 'reference_antenna' in params:
             self._refant = params['reference_antenna']
@@ -640,6 +689,9 @@ class Ms(object):
         if self.msfile.exists():
             self.get_metadata_from_ms()
             self.listobs()
+
+        self._logger.debug("MS object created with {self.__dict__}.")
+
 
     def exists(self):
         """Returns if the associated MS file exists.
@@ -650,8 +702,8 @@ class Ms(object):
         """Recovers all useful metadata from the MS file and stores it in the object.
 
         -- May Raise
-        It may raise KeyError if the type of sources (target, phaseref, fringefinder) are not specified
-        in the self.params dict.
+        It may raise KeyError if the type of sources (target, phaseref, fringefinder)
+        are not specified in the self.params dict.
         """
         m = msmd(str(self.msfile))
         if not m.open(str(self.msfile)):
@@ -685,8 +737,10 @@ class Ms(object):
                     else:
                         a_type = SourceType.other
                 except KeyError:
-                    rprint("[bold yellow]-- No source type information has been found --[bold yellow]")
-                    rprint("You better define manually or through the inputs which sources are target/calibrator/etc.")
+                    rprint("[bold yellow]-- No source type information has been " \
+                           "found --[bold yellow]")
+                    rprint("You better define manually or through the inputs which sources " \
+                           "are target/calibrator/etc.")
                     a_type = SourceType.other
 
                 self.sources.append(Source(a_name, a_type,
@@ -717,8 +771,8 @@ class Ms(object):
                     corr_pos.append(corr_order.index(Stokes.XX))
                     corr_pos.append(corr_order.index(Stokes.YY))
                 except ValueError:
-                    rprint("[bold red]The associated MS does not have neither circular nor linear-based " \
-                           "polarization information[/bold red]")
+                    rprint("[bold red]The associated MS does not have neither circular nor " \
+                           "linear-based polarization information[/bold red]")
         finally:
             m.close()
 
@@ -728,6 +782,23 @@ class Ms(object):
                 return ValueError(f"The MS file {self.msfile} could not be openned.")
 
             ant_subband = defaultdict(set)
+            # TODO: parallelize the following. This approach blocks indefinitely. Because of the MS.
+            # if test:
+            #     ant_subband_mutex = Lock()
+            #     rprint('\n[bold]Reading the MS to find which antennas actually observed...[/bold]')
+            #     with futures.ProcessPoolExecutor(max_workers=8) as executor:
+            #         workers = []
+            #         with progress.Progress() as progress_bar:
+            #             task = progress_bar.add_task("[yellow]Reading MS...", total=nrows)
+            #             for (start, nrow) in tools.chunkert(0, nrows, 5000):
+            #                 kwargs = {'mset': m, 'ant_subband_dict': ant_subband, 'startrow': start,
+            #                           'nrow': nrow, 'antenna_names': antenna_names,
+            #                           'spw_names': spw_names, 'corr_pos': corr_pos,
+            #                           'mutex': ant_subband_mutex}
+            #                 print(f"Launching {start}")
+            #                 workers.append(executor.submit(self._get_spw_per_ant, **kwargs))
+            #                 progress_bar.update(task, advance=nrow)
+            # else:
             rprint('\n[bold]Reading the MS to find which antennas actually observed...[/bold]')
             with progress.Progress() as progress_bar:
                 task = progress_bar.add_task("[yellow]Reading MS...", total=nrows)
@@ -752,6 +823,26 @@ class Ms(object):
             self.antennas[antenna_name].observed = len(self.antennas[antenna_name].subbands) > 0
 
         self.listobs()
+
+
+    def _get_spw_per_ant(self, mset, ant_subband_dict, startrow, nrow, antenna_names, spw_names,
+                         corr_pos, mutex):
+        ants1 = mset.getcol('ANTENNA1', startrow=startrow, nrow=nrow)
+        ants2 = mset.getcol('ANTENNA2', startrow=startrow, nrow=nrow)
+        spws = mset.getcol('DATA_DESC_ID', startrow=startrow, nrow=nrow)
+        msdata = mset.getcol('DATA', startrow=startrow, nrow=nrow)
+        print(r"Got data from starrow: {startrow}")
+
+        for ant_i,antenna_name in enumerate(antenna_names):
+            for spw in spw_names:
+                cond = np.where((ants1 == ant_i) & (ants2 == ant_i) & (spws == spw))
+                if not (abs(msdata[corr_pos][:, :, cond[0]]) < 1e-5).all():
+                    print(f"Acquiring mutex for {startrow}")
+                    mutex.acquire()
+                    print(f"Acquired mutex for {startrow}")
+                    ant_subband_dict[antenna_name].add(spw)
+                    mutex.release()
+                    print(f"Released mutex for {startrow}")
 
 
     def antennas_in_scan(self, scanno: int) -> list:
@@ -837,8 +928,9 @@ class Importing(object):
         # TODO: LBA import in CASA?
         raise NotImplementedError
 
+
     def evn_fitsidi(self, fitsidifiles: Union[list, str], ignore_antab=False,
-                           ignore_uvflg=False, delete=False):
+                           ignore_uvflg=False, delete=False, replace_tsys=False):
         """Imports the provided FITS-IDI files from an EVN observation into a single MS file.
         If checks if the FITS-IDI files already contain the Tsys and GC tables. Otherwise, it
         will first append such information and then import the files.
@@ -850,12 +942,16 @@ class Importing(object):
             fitsidifiles : list or str
                 If str, it will retrieve all files that match the given path/name.
                 If list, it must be an ordered list of all FITS-IDI files that will be imported.
-            ignore_antab : False
+            ignore_antab : bool (default False)
                 If the FITS-IDI files should be imported into a MS without caring about the ANTAB
                 information (not recommended).
-            ignore_uvflg : False
+            ignore_uvflg : bool (default False)
                 If the FITS-IDI files should be imported into a MS without caring about the .uvflg
                 file (AIPS-format a-priori flag table) information (not recommended).
+            delete : bool (default False)
+                Overwrites the MS if existing.
+            replace_tsys : bool (default False)
+                Overwrites the Tsys/GC information, if exists, in the FITS-IDI files.
         """
         if self._ms.msfile.exists():
             if delete:
@@ -875,6 +971,10 @@ class Importing(object):
             raise TypeError("The argument fitsidifiles should be either a list or str. "
                             f"Currently is {fitsidifiles} (type {type(fitsidifiles)})")
 
+        self._ms.logger.debug(f"FITS-IDI files to read: {', '.join(fitsidifiles)}.")
+        if len(fitsidifiles) == 0:
+                raise FileNotFoundError(f"No files matching {fitsidifiles} could be found.")
+
         for a_fitsidi in fitsidifiles:
             if not os.path.isfile(a_fitsidi):
                 raise FileNotFoundError(f"The file {a_fitsidi} could not be found.")
@@ -886,9 +986,12 @@ class Importing(object):
             assert antabfile.exists(), \
                    f"The associated file {antabfile} should exist but was not found."
             rprint("[bold]Appending the Tsys values to the FITS-IDI files[/bold]")
-            fitsidi.append_tsys(str(antabfile), fitsidifiles)
-            rprint("[bold]Appending the GC values to the FITS-IDI files[/bold]")
-            fitsidi.append_gc(str(antabfile), fitsidifiles[0])
+            try:
+                fitsidi.append_tsys(str(antabfile), fitsidifiles, replace=replace_tsys)
+                rprint("[bold]Appending the GC values to the FITS-IDI files[/bold]")
+                fitsidi.append_gc(str(antabfile), fitsidifiles[0], replace=replace_tsys)
+            except RuntimeError as e:
+                rprint(f"[yellow]{e}[/yellow]")
 
         if (not ignore_uvflg) and (not flagfile.exists()):
             assert uvflgfile.exists(), \

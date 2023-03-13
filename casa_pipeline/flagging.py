@@ -21,17 +21,27 @@ class Flagging(object):
         if isinstance(flagfile, str):
             flagfile = Path(flagfile)
 
-        flagfile = (self._ms.cwd / f"{self._ms.prefixname.lower()}.flag") if flagfile is None else flagfile
+        flagfile = (self._ms.cwd / f"{self._ms.prefixname.lower()}.flag") if flagfile is None \
+                   else flagfile
         assert flagfile.exists(), f"The flagfile {flagfile} cannot be found."
         casatasks.flagdata(vis=str(self._ms.msfile), inpfile=str(flagfile),
                            reason='any', action='apply', flagbackup=False, savepars=False)
-        casatasks.flagmanager(vis=str(self._ms.msfile), mode='save', versionname=f"flags from {flagfile}",
+        casatasks.flagmanager(vis=str(self._ms.msfile), mode='save',
+                              versionname=f"flags from {flagfile}",
                               comment='A-priori flags prior to any calibration.')
+
+
+    def flagdata(self, **kwargs):
+        """Runs the CASA tasks flagdata with all given parameters.
+        It just saves you the option of writting the MS name.
+        """
+        casatasks.flagdata(vis=str(self._ms.msfile), **kwargs)
 
 
     def edge_channels(self, edge_fraction: float = 0.1):
         """Flags the edge channels of each subband according to the specified edge_fraction.
-        For example, 0.1 (default) will imply to flag the 10% of the channels next to the edge of each subband.
+        For example, 0.1 (default) will imply to flag the 10% of the channels next to the edge
+        of each subband.
 
         Inputs
             edge_fraction : float [default = 0.1]
@@ -59,10 +69,12 @@ class Flagging(object):
         """
         antennas = [ant.strip() for ant in antenna.split(',' if ',' in antenna else ' ')]
         for ant in antennas:
-            assert ant in self._ms.antennas.names, f"The antenna {ant} did not participate in this observation."
+            assert ant in self._ms.antennas.names, \
+                   f"The antenna {ant} did not participate in this observation."
 
         casatasks.flagdata(vis=str(self._ms.msfile), mode='quack',
-                           antenna=','.join(antennas), quackinterval=quack_interval_s, flagbackup=False)
+                           antenna=','.join(antennas), quackinterval=quack_interval_s,
+                           flagbackup=False)
 
 
     def tfcrop(self, timecutoff=6.0, freqcutoff=5.0, timedevscale=5.0, freqdevscale=5.0):
@@ -71,8 +83,9 @@ class Flagging(object):
         """
         casatasks.flagdata(vis=str(self._ms.msfile), mode='tfcrop', datacolumn='corrected',
                            field='', ntime='scan', timecutoff=timecutoff, freqcutoff=freqcutoff,
-                           timefit='line', freqfit='line', flagdimension='freqtime', extendflags=True,
-                           timedevscale=timedevscale, freqdevscale=freqdevscale, extendpols=False, growaround=False,
+                           timefit='line', freqfit='line', flagdimension='freqtime',
+                           extendflags=True, timedevscale=timedevscale, freqdevscale=freqdevscale,
+                           extendpols=False, growaround=False,
                            action='apply', flagbackup=True, overwrite=True, writeflags=True)
 
 
@@ -84,3 +97,14 @@ class Flagging(object):
             tools.shell_command("aoflagger", [str(self._ms.msfile)])
         else:
             tools.shell_command("aoflagger", ["-strategy", strategy_file, str(self._ms.msfile)])
+
+
+    def check_unflagged_data(self):
+        """Checks if there are still unflagged data.
+        It will raise an error if
+        """
+        pass
+
+
+
+
