@@ -450,7 +450,7 @@ class Calibration(object):
                                 solint='inf', zerorates=True,
                                 refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
                                 gaintable=self.callib.gaintables(),
-                                interp=self.callib.interps(),
+                                interp=self.callib.interps(), weightfactor=1,
                                 corrdepflags=True, parang=True)
             # casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
             #                     timerange=self.get_sbd_timerange(),
@@ -472,7 +472,7 @@ class Calibration(object):
                                 field=','.join(self._ms.sources.all_calibrators.names),
                                 solint='inf', zerorates=False,
                                 refant=','.join(self.prioritize_ref_antennas()), combine='spw',
-                                minsnr=3, gaintable=self.callib.gaintables(),
+                                minsnr=3, gaintable=self.callib.gaintables(), weightfactor=1,
                                 interp=self.callib.interps(), corrdepflags=True,
                                 parang=True)
             spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd']))
@@ -519,7 +519,7 @@ class Calibration(object):
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd2']),
                                 timerange=self.get_sbd_timerange(), solint='inf', zerorates=True,
                                 refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
-                                gaintable=self.callib.gaintables(),
+                                gaintable=self.callib.gaintables(), weightfactor=1,
                                 interp=self.callib.interps(), corrdepflags=True, parang=True)
             self.callib.new_entry(name='sbd2', caltable=str(cals['sbd2']),
                                   parameters="tinterp='nearest'")
@@ -535,7 +535,7 @@ class Calibration(object):
                                 field=','.join(self._ms.sources.all_calibrators.names),
                                 solint='inf', zerorates=False, minsnr=5,
                                 refant=','.join(self.prioritize_ref_antennas()), combine='spw',
-                                gaintable=self.callib.gaintables(),
+                                gaintable=self.callib.gaintables(), weightfactor=1,
                                 interp=self.callib.interps(), corrdepflags=True, parang=True)
         spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd2']))
         self.callib.new_entry(name='mbd2', caltable=str(cals['mbd2']),
