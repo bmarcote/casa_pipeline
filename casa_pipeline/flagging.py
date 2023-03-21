@@ -24,11 +24,12 @@ class Flagging(object):
         flagfile = (self._ms.cwd / f"{self._ms.prefixname.lower()}.flag") if flagfile is None \
                    else flagfile
         assert flagfile.exists(), f"The flagfile {flagfile} cannot be found."
-        casatasks.flagdata(vis=str(self._ms.msfile), inpfile=str(flagfile),
+        results = casatasks.flagdata(vis=str(self._ms.msfile), inpmode='list', inpfile=str(flagfile),
                            reason='any', action='apply', flagbackup=False, savepars=False)
         casatasks.flagmanager(vis=str(self._ms.msfile), mode='save',
                               versionname=f"flags from {flagfile}",
                               comment='A-priori flags prior to any calibration.')
+        return results
 
 
     def flagdata(self, **kwargs):

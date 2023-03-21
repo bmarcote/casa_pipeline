@@ -271,6 +271,10 @@ class Calibration(object):
         self._callib = Callib(caldir / f"callib-{self._ms.prefixname}.txt")
         self._sbd_timerange = None
 
+    def copy_pols(self, antenna: Union[str, obsdata.Antenna], bad_pol: str, new_pol: str):
+        """Copies the information from 'new_pol' into 'bad_pol'
+        """
+
     def a_priori_calibration(self, replace=False):
         """Generates the calibration tables for gain and system temperature.
         Existing versions of the calibration will be removed first if replace is True.
