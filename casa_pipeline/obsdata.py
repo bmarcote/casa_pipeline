@@ -656,6 +656,10 @@ class Ms(object):
         self.epoch = starttime.date()
 
     @property
+    def splits(self):
+        return self._splits
+
+    @property
     def logger(self) -> logging.Logger:
         return self._logger
 
@@ -680,6 +684,7 @@ class Ms(object):
         self._freqsetup = None
         self._sources = Sources()
         self._antennas = Antennas()
+        self._splits = defaultdict(list)
         self._params = params if params is not None else {}
         if logger is None:
             self._logger = logging.getLogger(f"Ms-{self.prefixname}")
@@ -908,11 +913,14 @@ class Ms(object):
             kwargs['chanbin'] = self.freqsetup.channels
 
         for a_source in self.sources.names if sources is None else sources:
+            np.int = int
+            np.float = float  # these two is to test if them mstransform works. It uses deprecated types!
             casatasks.mstransform(vis=str(self.msfile), outputvis=f"{self.prefixname}.{a_source}.ms",
                             field=a_source, keepflags=keepflags, **kwargs)
             splits[a_source] = Ms(f"{self.prefixname}.{a_source}", cwd=self.cwd, params=self._params,
                                   logger=self._logger)
 
+            self.splits[a_source].append(splits[a_source])
         return splits
 
 
