@@ -7,6 +7,7 @@ import logging
 import datetime as dt
 from pathlib import Path
 from typing import Optional, Union # Iterable, NoReturn, List, Tuple
+# import blessed
 # tomli was introduced in the standard library as tomllib in Python 3.11
 try:
     import tomllib
@@ -273,6 +274,65 @@ class Project(object):
         self._importing = obj._importing
         self.logger.info(f"Loaded Project object from the stored local copy at {self._local_copy}.")
         return True
+
+    def summary(self):
+    #     TODO:  this is commented out because I have issues installing blessed within the CASA
+    #     environment in my desktop
+    #     term = blessed.Terminal(force_styling=True)
+        s_file = []
+    #     with term.fullscreen(), term.cbreak():
+    #         s = term.white_on_red(term.center(term.bold(f"--- {self.projectname} ---")))
+        s_file += [f"# {self.projectname}"]
+    #         s += f"{term.normal}\n\n{term.normal}"
+    #         s += term.bold_green('General Information\n')
+    #         s += ["## General Information"]
+        if self.observatory != '':
+    #             s += term.bright_black('Observatory: ') + f"{self.observatory}\n"
+            s_file += [f"Observatory: {self.observatory}"]
+    #
+    #         # TODO: if it is EVN, put a direct link to the archive (same function as in evn_postprocess)
+    #         s += term.bright_black('') + f"\n"
+    #         s_file += [f""]
+    #         s += term.bright_black('') + f"\n"
+    #         s_file += [f""]
+    #         s += term.bold_green('SOURCES\n')
+        s_file += [f"Central frequency: {self.freqsetup.frequency}"]
+        s_file += [f"With a bandwith of {self.freqsetup.bandwidth} divided in " \
+                   f"{self.freqsetup.n_subbands} x {self.freqsetup.bandwith_per_subband} " \
+                   f"subbands, with {self.freqsetup.channels} spectral channels each.\n"]
+
+        s_file += ["## Sources"]
+    #         s += term.bright_black('Fringe finders: ') + \
+    #              f"{', '.join([s.name for s in self.sources.fringe_finders])}\n"
+        s_file += ["Fringe finders: " \
+                   f"{', '.join([s.name for s in self.sources.fringe_finders])}"]
+    #         s += term.bright_black('Phase calibrators: ') + \
+    #              f"{', '.join([s.name for s in self.sources.phase_calibrators])}\n"
+        s_file += ["Phase calibrators: " \
+                   f"{', '.join([s.name for s in self.sources.phase_calibrators])}"]
+    #         s += term.bright_black('Target sources: ') + \
+    #              f"{', '.join([s.name for s in self.sources.targets])}\n\n"
+        s_file += [f"Target sources: {', '.join([s.name for s in self.sources.targets])}"]
+        for src in self.sources:
+    #             s += term.bright_black(f"{src.name}: ") + f"src.coordinates.\n"
+            s_file += [f"{src.name}: {src.coordinates.to_string('hmsdms')}"]
+    #
+    #
+        s_file += ["## Antennas"]
+        s_file += ["   Observed?  Subbands"]
+        for ant in self.antennas:
+            s_file += [f"{ant.name} {'yes' if ant.observed else 'no'} " \
+                       f"{' '*(3*(ant.subbands[0]))}{ant.subbands}"]
+
+        # s_file += ["## Data files"]
+    #         s += term.bright_black('') + f"\n"
+    #         s += term.bright_black('') + f"\n"
+    #         s += term.bright_black('') + f"\n"
+    #         s += term.bright_black('') + f"\n"
+    #         s += term.bright_black('') + f"\n"
+    #         s += term.bright_black('') + f"\n"
+    #         s += term.bright_black('') + f"\n"
+
 
     def __repr__(self, *args, **kwargs):
         rep = super().__repr__(*args, **kwargs)

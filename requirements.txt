@@ -3,4 +3,4 @@ scipy
 natsort
 astropy
 rich
-
+blessed

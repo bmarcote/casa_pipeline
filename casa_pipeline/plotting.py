@@ -45,6 +45,21 @@ class Jplotter(object):
         print("done auto plots on calibrator scan")
 
 
+
+class Casaplot(object):
+    """Functions to produce plots with the CASA-integrated tools
+    """
+
+    def casa_bandpass(self):
+        """Plots the bandpass calibration
+        """
+        # https://casadocs.readthedocs.io/en/stable/api/tt/casatasks.visualization.plotbandpass.html
+        pass
+
+    def casa_tsys(self):
+        pass
+
+
 class Plotting(object):
     """Functions to produce plots from a Ms object.
     """
