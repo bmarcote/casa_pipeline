@@ -588,7 +588,7 @@ class Ms(object):
         return self._refant
 
     @refant.setter
-    def refant(self, new_refant):
+    def refant(self, new_refant: Union[str, list]):
         """Defines the antenna to use as reference during calibration.
         It can be either a str (with a single antenna, or comma-separated antennas),
         or a list with the antenna(s) to use as reference.
@@ -598,9 +598,12 @@ class Ms(object):
         elif not isinstance(new_refant, list):
             raise TypeError("The antenna introduced must be either a  str or list")
 
-        for antenna in new_refant:
-            assert antenna in self.antennas.names, \
-                   f"Antenna {antenna} for refant is not in the array."
+        # As it may be set before the antenna information was retrieved from the MS
+        if len(self.antennas) > 0:
+            for antenna in new_refant:
+                assert antenna in self.antennas.names, \
+                       f"Antenna {antenna} for refant is not in the array."
+
         self._refant = list(new_refant)
 
     @property
@@ -672,7 +675,7 @@ class Ms(object):
         else:
             TypeError(f"The working directory ({cwd}) should be either None, a Path type, or str.")
 
-        self._msfile = self.cwd / Path(f"{prefixname.lower()}.ms")
+        self._msfile = self.cwd / Path(f"{prefixname}.ms")
         self._uvfitsfile = self.cwd / self.msfile.name.replace('.ms', '.uvfits')
         self._freqsetup = None
         self._sources = Sources()
@@ -684,13 +687,13 @@ class Ms(object):
             self._logger = logger
 
         if 'reference_antenna' in params:
-            self._refant = params['reference_antenna']
+            self.refant = params['reference_antenna']
 
         if self.msfile.exists():
             self.get_metadata_from_ms()
             self.listobs()
 
-        self._logger.debug("MS object created with {self.__dict__}.")
+        self._logger.debug(f"MS object created with {self.__dict__}.")
 
 
     def exists(self):
@@ -896,10 +899,11 @@ class Ms(object):
                        f"The passed source {source} is not in the MS {self.msfile}."
 
         for a_source in self.sources.names if sources is None else sources:
-            casatasks.split(vis=str(self.msfile), outputvis=f"{self.prefixname}.{a_source}.ms",
-                            field=a_source, antenna='!&&&', width=self.freqsetup.channels,
+            casatasks.mstransform(vis=str(self.msfile), outputvis=f"{self.prefixname}.{a_source}.ms",
+                            field=a_source, width=self.freqsetup.channels,
                             keepflags=keepflags, **kwargs)
-            splits[a_source.name] = Ms(f"{self.prefixname}.{a_source.name}")
+            splits[a_source] = Ms(f"{self.prefixname}.{a_source}", cwd=self.cwd, params=self._params,
+                                  logger=self._logger)
 
         return splits
 

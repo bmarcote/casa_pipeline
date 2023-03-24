@@ -67,10 +67,10 @@ class Project(object):
         It can be either a str (with a single antenna, or comma-separated antennas),
         or a list with the antenna(s) to use as reference.
         """
-        if isinstance(new_refant, list):
-            self._ms.refant = new_refant
-        elif isinstance(new_refant, str):
+        if isinstance(new_refant, str):
             self._ms.refant = [ant.strip() for ant in new_refant.split(',')]
+        elif isinstance(new_refant, list):
+            self._ms.refant = new_refant
 
     @property
     def freqsetup(self) -> obsdata.FreqSetup:

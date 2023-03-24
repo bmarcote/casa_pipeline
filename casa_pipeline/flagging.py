@@ -36,7 +36,7 @@ class Flagging(object):
         """Runs the CASA tasks flagdata with all given parameters.
         It just saves you the option of writting the MS name.
         """
-        casatasks.flagdata(vis=str(self._ms.msfile), **kwargs)
+        return casatasks.flagdata(vis=str(self._ms.msfile), **kwargs)
 
 
     def edge_channels(self, edge_fraction: float = 0.1):
@@ -51,7 +51,7 @@ class Flagging(object):
         edge_channel = int(self._ms.freqsetup.channels/(100*edge_fraction))
         start = str(edge_channel - 1)
         end = str(self._ms.freqsetup.channels - edge_channel)
-        casatasks.flagdata(vis=str(self._ms.msfile), mode='manual', flagbackup=False,
+        return casatasks.flagdata(vis=str(self._ms.msfile), mode='manual', flagbackup=False,
                            spw=f"*:0~{start};{end}~{str(self._ms.freqsetup.channels - 1)}")
 
 
@@ -73,7 +73,7 @@ class Flagging(object):
             assert ant in self._ms.antennas.names, \
                    f"The antenna {ant} did not participate in this observation."
 
-        casatasks.flagdata(vis=str(self._ms.msfile), mode='quack',
+        return casatasks.flagdata(vis=str(self._ms.msfile), mode='quack',
                            antenna=','.join(antennas), quackinterval=quack_interval_s,
                            flagbackup=False)
 
@@ -82,7 +82,7 @@ class Flagging(object):
         """Runs flagdata with the tfcrop option.
         In principle it should work fine for EVN data as long as the data are already calibrated.
         """
-        casatasks.flagdata(vis=str(self._ms.msfile), mode='tfcrop', datacolumn='corrected',
+        return casatasks.flagdata(vis=str(self._ms.msfile), mode='tfcrop', datacolumn='corrected',
                            field='', ntime='scan', timecutoff=timecutoff, freqcutoff=freqcutoff,
                            timefit='line', freqfit='line', flagdimension='freqtime',
                            extendflags=True, timedevscale=timedevscale, freqdevscale=freqdevscale,
@@ -104,7 +104,7 @@ class Flagging(object):
         """Checks if there are still unflagged data.
         It will raise an error if
         """
-        pass
+        raise NotImplementedError
 
 
 

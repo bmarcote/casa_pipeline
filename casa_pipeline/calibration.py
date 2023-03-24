@@ -48,6 +48,7 @@ class CallibEntries():
 
     @property
     def names(self):
+        # TODO: str has no attribute name...   likely when it is generated in callib??
         return [entry.name for entry in self._entries]
 
     @property
@@ -224,13 +225,9 @@ def get_spw_global_fringe(caltable: Path) -> int:
     a_table = tb(str(caltable))
     try:
         a_table.open(str(caltable))
-        if not a_table.open(a_table.getkeyword('SPECTRAL_WINDOW').replace('Table: ', '')):
-            raise RuntimeError(f"Could not open the {caltable}/SPECTRAL_WINDOW calibration table.")
-        the_spw = int(a_table.getcol('MEAS_FREQ_REF')[0])
+        return a_table.getcol('SPECTRAL_WINDOW_ID')[0]
     finally:
         a_table.close()
-
-    return the_spw
 
 
 
@@ -379,12 +376,12 @@ class Calibration(object):
         #TODO: implement or pass it by the user
         if 'calibration' in self._ms.params and 'sbd_timerange' in self._ms.params['calibration']:
             self._sbd_timerange = self._ms.params['calibration']['sbd_timerange']
-            self._ms.debug(f"sbd time range (from inputs): {self._sbd_timerange}.")
+            self._ms.logger.debug(f"sbd time range (from inputs): {self._sbd_timerange}.")
             assert self._sbd_timerange is not None, "'calibration' > 'sbd_timerange' in the input" \
                                                 " params file should contain a time range."
             return self._sbd_timerange
         elif self._sbd_timerange is not None:
-            self._ms.debug(f"sbd time range (stored): {self._sbd_timerange}.")
+            self._ms.logger.debug(f"sbd time range (stored): {self._sbd_timerange}.")
             return self._sbd_timerange
         else:
             raise NotImplementedError
@@ -396,7 +393,7 @@ class Calibration(object):
             # finally:
             #     m.close()
             #
-            # self._ms.debug(f"sbd time range (from MS): {self._sbd_timerange}.")
+            # self._ms.logger.debug(f"sbd time range (from MS): {self._sbd_timerange}.")
 
 
 
@@ -423,7 +420,7 @@ class Calibration(object):
 
         sorted_antenna_list += best_ants
         sorted_antenna_list += rest_ants
-        self._ms.debug(f"Prioritized reference antennas: {', '.join(sorted_antenna_list)}.")
+        self._ms.logger.debug(f"Prioritized reference antennas: {', '.join(sorted_antenna_list)}.")
         return sorted_antenna_list
 
 
@@ -454,7 +451,8 @@ class Calibration(object):
                                 solint='inf', zerorates=True,
                                 refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
                                 gaintable=self.callib.gaintables(),
-                                interp=self.callib.interps(), weightfactor=1,
+                                interp=self.callib.interps(), #weightfactor=1,
+                                # TODO: weightit not implemented yet in the stable release
                                 corrdepflags=True, parang=True)
             # casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
             #                     timerange=self.get_sbd_timerange(),
@@ -476,7 +474,7 @@ class Calibration(object):
                                 field=','.join(self._ms.sources.all_calibrators.names),
                                 solint='inf', zerorates=False,
                                 refant=','.join(self.prioritize_ref_antennas()), combine='spw',
-                                minsnr=3, gaintable=self.callib.gaintables(), weightfactor=1,
+                                minsnr=3, gaintable=self.callib.gaintables(), #weightfactor=1, TODO
                                 interp=self.callib.interps(), corrdepflags=True,
                                 parang=True)
             spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd']))
@@ -523,7 +521,7 @@ class Calibration(object):
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd2']),
                                 timerange=self.get_sbd_timerange(), solint='inf', zerorates=True,
                                 refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
-                                gaintable=self.callib.gaintables(), weightfactor=1,
+                                gaintable=self.callib.gaintables(), #weightfactor=1,
                                 interp=self.callib.interps(), corrdepflags=True, parang=True)
             self.callib.new_entry(name='sbd2', caltable=str(cals['sbd2']),
                                   parameters="tinterp='nearest'")
@@ -539,7 +537,7 @@ class Calibration(object):
                                 field=','.join(self._ms.sources.all_calibrators.names),
                                 solint='inf', zerorates=False, minsnr=5,
                                 refant=','.join(self.prioritize_ref_antennas()), combine='spw',
-                                gaintable=self.callib.gaintables(), weightfactor=1,
+                                gaintable=self.callib.gaintables(), #weightfactor=1,
                                 interp=self.callib.interps(), corrdepflags=True, parang=True)
         spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd2']))
         self.callib.new_entry(name='mbd2', caltable=str(cals['mbd2']),
@@ -552,7 +550,7 @@ class Calibration(object):
     def apply_calibration(self):
         """Applies the current calibration by using the tables written in the callib.
         """
-        casatasks.applycal(vis=str(self._ms.msfile), docallib=True,
+        return casatasks.applycal(vis=str(self._ms.msfile), docallib=True,
                            callib=str(self.callib.filename), parang=True)
 
 
