@@ -254,8 +254,9 @@ class Calibration(object):
         for a_file in files:
             if not a_file.exists():
                 rprint("[bold red] -- Error --[/bold red]")
-                self._ms.logger.error(f"[bold red]{a_file} was not created during " \
-                                      "a_priori_calibration.[/bold red]")
+                rprint(f"[bold red]{a_file} was not created during " \
+                       "a_priori_calibration.[/bold red]")
+                self._ms.logger.error(f"{a_file} was not created during a_priori_calibration.")
                 raise FileNotFoundError(f"The calibration table {a_file} should have been "
                                         "generated but does not exist.")
 
@@ -361,7 +362,7 @@ class Calibration(object):
             print(f"{caltec} (ionospheric corrections) already exists. "
                   "It will not be generated again.")
 
-        self._verify([caltec, imtec])
+        self._verify([caltec])
 
 
     def get_sbd_timerange(self, interval='2min') -> str:

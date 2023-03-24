@@ -882,9 +882,14 @@ class Ms(object):
 
 
     def split(self, sources: Optional[Union[Iterable[str], str, None]] = None,
-              keepflags=False, **kwargs):
+              keepflags=False, chanbin: int =-1, **kwargs):
         """Splits all the data from all calibrated sources.
         If sources is None, then all sources will be split.
+
+        Params:
+            - chanbin : int  (default = -1)
+              Width (bin) of input channels to average to for an output channel.
+              If -1, then if will create a single-output channel per spw.
 
         It returns a dict with all split source names as keys. The values are the new Ms objects.
         """
@@ -898,10 +903,13 @@ class Ms(object):
                 assert source in self.sources, \
                        f"The passed source {source} is not in the MS {self.msfile}."
 
+        if chanbin == -1 or chanbin > 1:
+            kwargs['chanaverage'] = True
+            kwargs['chanbin'] = self.freqsetup.channels
+
         for a_source in self.sources.names if sources is None else sources:
             casatasks.mstransform(vis=str(self.msfile), outputvis=f"{self.prefixname}.{a_source}.ms",
-                            field=a_source, width=self.freqsetup.channels,
-                            keepflags=keepflags, **kwargs)
+                            field=a_source, keepflags=keepflags, **kwargs)
             splits[a_source] = Ms(f"{self.prefixname}.{a_source}", cwd=self.cwd, params=self._params,
                                   logger=self._logger)
 
