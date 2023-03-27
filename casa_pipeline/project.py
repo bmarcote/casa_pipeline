@@ -275,7 +275,7 @@ class Project(object):
         self.logger.info(f"Loaded Project object from the stored local copy at {self._local_copy}.")
         return True
 
-    def summary(self):
+    def summary(self, outfile: Union[str, Path, None] = None):
     #     TODO:  this is commented out because I have issues installing blessed within the CASA
     #     environment in my desktop
     #     term = blessed.Terminal(force_styling=True)
@@ -296,10 +296,11 @@ class Project(object):
     #         s += term.bright_black('') + f"\n"
     #         s_file += [f""]
     #         s += term.bold_green('SOURCES\n')
-        s_file += [f"Central frequency: {self.freqsetup.frequency}"]
-        s_file += [f"With a bandwith of {self.freqsetup.bandwidth} divided in " \
-                   f"{self.freqsetup.n_subbands} x {self.freqsetup.bandwith_per_subband} " \
-                   f"subbands, with {self.freqsetup.channels} spectral channels each.\n"]
+        s_file += [f"Central frequency: {self.freqsetup.frequency:.2}"]
+        s_file += [f"With a bandwith of {self.freqsetup.bandwidth.to(u.MHz)} divided in " \
+                   f"{self.freqsetup.n_subbands} x {self.freqsetup.bandwidth_per_subband.to(u.MHz)} " \
+                   f"subbands."]
+        s_file += [f"{self.freqsetup.channels} spectral channels per subband.\n"]
 
         s_file += ["## Sources"]
     #         s += term.bright_black('Fringe finders: ') + \
@@ -312,17 +313,24 @@ class Project(object):
                    f"{', '.join([s.name for s in self.sources.phase_calibrators])}"]
     #         s += term.bright_black('Target sources: ') + \
     #              f"{', '.join([s.name for s in self.sources.targets])}\n\n"
-        s_file += [f"Target sources: {', '.join([s.name for s in self.sources.targets])}"]
+        s_file += [f"Target sources: {', '.join([s.name for s in self.sources.targets])}\n"]
+        longest_src_name = max([len(s) for s in self.sources.names])
         for src in self.sources:
     #             s += term.bright_black(f"{src.name}: ") + f"src.coordinates.\n"
-            s_file += [f"{src.name}: {src.coordinates.to_string('hmsdms')}"]
+            s_file += [f"{src.name}:{' '*(longest_src_name-len(src.name))} {src.coordinates.to_string('hmsdms')}"]
     #
     #
-        s_file += ["## Antennas"]
-        s_file += ["   Observed?  Subbands"]
+        s_file += ["\n## Antennas"]
+        s_file += ["   Did Observe?  Subbands"]
         for ant in self.antennas:
-            s_file += [f"{ant.name} {'yes' if ant.observed else 'no'} " \
+            s_file += [f"{ant.name} {'yes' if ant.observed else 'no '} " \
                        f"{' '*(3*(ant.subbands[0]))}{ant.subbands}"]
+
+        if outfile is not None:
+            with open(outfile, 'w') as fout:
+                fout.write('\n'.join(s_file))
+
+        print('\n'.join(s_file))
 
         # s_file += ["## Data files"]
     #         s += term.bright_black('') + f"\n"

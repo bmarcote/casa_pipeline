@@ -175,6 +175,40 @@ class Callib(object):
 
         self.update_file()
 
+    def backup(self, filename: Union[str, Path, None] = None, replace: bool = False):
+        """Makes a backup of the current callib file, copying its content into another file called filename.
+
+        Inputs:
+            filename : str/Path (default = None)
+                Name of the associated file that will be created as a copy of the current callib file.
+                If None, it will append (an incremental) number to the current filename of the callib.
+                That is, if no previous backup exists, it will be 'callib_file_name.1'.
+                Later backups will be called '*.2', '*.3', etc.
+            replace : bool (default = False)
+                If 'filename' is provided, and exists, then this option defines if the file should be overwriten.
+                If 'filename' is None, then this option has no effect.
+        """
+        i = 1
+        if filename is not None:
+            if isinstance(filename, str):
+                filename = Path(filename)
+
+            if filename.exists():
+                if replace:
+                    filename.unlink()
+                else:
+                    raise FileExistsError(f"The file {filename} exists and the replacing option has not been set.")
+        else:
+            filename = Path(str(self.filename) + ".{i}")
+            while filename.exists():
+                i += 1
+                filename = Path(str(self.filename) + ".{i}")
+
+        with open(self.filename, 'r') as fin, open(filename, 'w') as fout:
+            fout.write(fin.read())
+
+        return filename
+
 
     def update_file(self):
         with open(self.filename, 'w') as callib_file:
@@ -554,6 +588,10 @@ class Calibration(object):
         return casatasks.applycal(vis=str(self._ms.msfile), docallib=True,
                            callib=str(self.callib.filename), parang=True)
 
+    def clearcal(self, **kwargs):
+        """Re-initializes the calibration for a visibility data set.
+        """
+        casatasks.clearcal(vis=str(self._ms.msfile), **kwargs)
 
 
     # def self_calibration(project: obsdata.Project, source_model: str, calmode: str, solint: int):
