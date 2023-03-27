@@ -14,6 +14,7 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib
 
+from astropy import units as u
 from . import obsdata
 from . import calibration
 from . import flagging
