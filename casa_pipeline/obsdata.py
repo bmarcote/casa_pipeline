@@ -793,7 +793,7 @@ class Ms(object):
             # TODO: parallelize the following. This approach blocks indefinitely. Because of the MS.
             # if test:
             #     ant_subband_mutex = Lock()
-            #     rprint('\n[bold]Reading the MS to find which antennas actually observed...[/bold]')
+            #     rprint('\n[bold]Reading the MS to find which antennas actually observed.[/bold]')
             #     with futures.ProcessPoolExecutor(max_workers=8) as executor:
             #         workers = []
             #         with progress.Progress() as progress_bar:
@@ -914,12 +914,12 @@ class Ms(object):
 
         for a_source in self.sources.names if sources is None else sources:
             np.int = int
-            np.float = float  # these two is to test if them mstransform works. It uses deprecated types!
-            casatasks.mstransform(vis=str(self.msfile), outputvis=f"{self.prefixname}.{a_source}.ms",
-                            field=a_source, keepflags=keepflags, **kwargs)
-            splits[a_source] = Ms(f"{self.prefixname}.{a_source}", cwd=self.cwd, params=self._params,
-                                  logger=self._logger)
-
+            np.float = float  # these two is because CASA uses deprecated types in newer numpy ver!
+            casatasks.mstransform(vis=str(self.msfile),
+                                  outputvis=f"{self.prefixname}.{a_source}.ms",
+                                  field=a_source, keepflags=keepflags, **kwargs)
+            splits[a_source] = Ms(f"{self.prefixname}.{a_source}", cwd=self.cwd,
+                                  params=self._params, logger=self._logger)
             self.splits[a_source].append(splits[a_source])
         return splits
 
@@ -936,6 +936,8 @@ class Ms(object):
                                combinespw=True, padwithflags=True, overwrite=overwrite)
 
 
+
+
 class Importing(object):
     """Class that contains different static functions to import data from different observatories
     into a MS. Each function would conduct the necessary steps to get a properly prepared MS file.
@@ -947,6 +949,17 @@ class Importing(object):
     def lba_fits(self, fitsfile: str):
         # TODO: LBA import in CASA?
         raise NotImplementedError
+
+    def evn_download(self, projectcode: str = None, username: str = None, password: str = None):
+        """Downloads the data files associated with the given EVN project.
+        It will download the associated FITS-IDI files, and the associated .antab and .uvflg files.
+
+        Inputs
+            projectcode : str  (default = None)
+                Project code of the
+        """
+        # TODO: Do I need the observing epoch?
+        pass
 
 
     def evn_fitsidi(self, fitsidifiles: Union[list, str], ignore_antab=False,

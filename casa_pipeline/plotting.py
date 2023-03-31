@@ -16,7 +16,7 @@ class Jplotter(object):
         yield f"ms {str(self._ms.msfile)}"
         yield "indexr"
 
-    def autocorr(self, sources: list = None):
+    def autocorr(self, sources: list = None, scans: list = None):
         """It will create auto-correlation plots for the given sources.
 
         sources : list
@@ -65,6 +65,36 @@ class Plotting(object):
     """
     def __init__(self, ms: obsdata.Ms):
         self._ms = ms
+        self._jplotter = Jplotter(ms)
 
-    def jplotter(self, **kwargs):
+    def autocorr(self, **kwargs):
+        """Creates a plot
+        """
         pass
+
+    def crosscorr(self, **kwargs):
+        pass
+
+    def anptime(self, **kwargs):
+        pass
+
+    def amptime(self, **kwargs):
+        pass
+
+    def phasetime(self, **kargs):
+        pass
+
+    def caltable(self, calname: str, **kargs):
+        pass
+
+    def radplot(self, mode='a&p', withmodel=False,**kargs):
+        pass
+
+    def tplot(self, **kargs):
+        pass
+
+    # def phasetime(self, **kargs):
+    #     pass
+
+    # def phasetime(self, **kargs):
+    #     pass

@@ -39,6 +39,12 @@ class Flagging(object):
         return casatasks.flagdata(vis=str(self._ms.msfile), **kwargs)
 
 
+    def autocorrelations(self):
+        """Flags the auto-correlations from the data.
+        """
+        return casatasks.flagdata(vis=str(self._ms.msfile), mode='manual', autocorr=True)
+
+
     def edge_channels(self, edge_fraction: float = 0.1):
         """Flags the edge channels of each subband according to the specified edge_fraction.
         For example, 0.1 (default) will imply to flag the 10% of the channels next to the edge
@@ -106,6 +112,14 @@ class Flagging(object):
         """
         raise NotImplementedError
 
+    def lsflagging(self, timeint_min: float = 1):
+        """Low-Statistics Flagging scans the visibilities in the MS for all calibrator sources
+        (or target if no phase-referencing is set), and analyzes the statistics along the
+        different polarizations. It expects that the cross-polarizations should always exhibit
+        a lower level of amplitudes than the parallel-polarizations.
+        Otherwise it assumes that the antenna did not show fringes at those times.
+        """
+        raise NotImplementedError
 
 
 

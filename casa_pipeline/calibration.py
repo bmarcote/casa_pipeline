@@ -11,7 +11,7 @@ from rich import print as rprint
 import casatasks
 from casatasks.private import tec_maps
 from casatools import table as tb
-from casatools import msmetadata as msmd
+# from casatools import msmetadata as msmd
 from . import obsdata
 
 """Diferent functions that can be used directly from this module in order to calibrate the data.
@@ -21,12 +21,18 @@ obsdata/Ms objects.
 @dataclass
 class CallibEntry:
     """Defines an entry in a calibration tables library.
-    It contains a name (label to refer to which step did this calibration entry) and the full entry
-    to be written in a callib file.
+    It contains the following parameters:
+        - name : str
+          Label that refers to which step did this calibration entry.
+        - caltable : str
+          Filename of the associated calibration table.
+        - parameters : dict
+          Parameters associated to the calibration table to used during applycal().
+          It, in general, may contain the keys 'tinterp', 'finterp', and/or 'spwmap'.
     """
     name: str
     caltable: str
-    parameters: str
+    parameters: dict
 
 
 class CallibEntries():
@@ -48,7 +54,6 @@ class CallibEntries():
 
     @property
     def names(self):
-        # TODO: str has no attribute name...   likely when it is generated in callib??
         return [entry.name for entry in self._entries]
 
     @property
@@ -127,20 +132,39 @@ class Callib(object):
     def associated_parameters(self, name: str):
         return self._entries[name].parameters
 
+    def names(self) -> list:
+        return self.entries.names
+
     def gaintables(self) -> list:
         return self.entries.caltables
 
+    def parameters(self) -> list:
+        return self.entries.parameters
+
     def interps(self) -> list:
+        """Returns a list with the interpolations to apply for each calibration table.
+        This will have the format expected to run a calibration step in CASA when calling
+        the 'interp' parameter.
+        """
         interp_params = []
         for acal in self.entries.parameters:
-            temp = [atemp.replace("'", "").split('=') for atemp in acal.split(' ') if '=' in atemp]
-            temp = {atemp[0]: atemp[1] for atemp in temp}
-            interp_params.append(f"{temp['tinterp'] if 'tinterp' in temp else 'linear'}," \
-                                 f"{temp['finterp'] if 'finterp' in temp else 'linear'}")
+            interp_params.append(f"{acal['tinterp'] if 'tinterp' in acal else 'linear'}," \
+                                 f"{acal['finterp'] if 'finterp' in acal else 'linear'}")
 
         return interp_params
 
-    def new_entry(self, name: str, caltable: str, parameters: str):
+
+    def spwmaps(self) -> list:
+        """Returns a list with the spwmap to apply for each calibration table.
+        """
+        spwmap_pars = []
+        for acal in self.entries.parameters:
+            spwmap_pars.append([] if 'spwmap' not in acal else acal['spwmap'])
+
+        return spwmap_pars
+
+
+    def new_entry(self, name: str, caltable: str, parameters: dict):
         """Adds a new callib entry to the list of associated entries.
         If there is already an entry with the same name, it will replace it.
         """
@@ -175,18 +199,21 @@ class Callib(object):
 
         self.update_file()
 
+
     def backup(self, filename: Union[str, Path, None] = None, replace: bool = False):
-        """Makes a backup of the current callib file, copying its content into another file called filename.
+        """Makes a backup of the current callib file, copying its content into another file
+        called filename.
 
         Inputs:
             filename : str/Path (default = None)
-                Name of the associated file that will be created as a copy of the current callib file.
-                If None, it will append (an incremental) number to the current filename of the callib.
+                Name of the associated file that will be created as a copy of the current
+                callib file. If None, it will append (an incremental) number to the current
+                filename of the callib.
                 That is, if no previous backup exists, it will be 'callib_file_name.1'.
                 Later backups will be called '*.2', '*.3', etc.
             replace : bool (default = False)
-                If 'filename' is provided, and exists, then this option defines if the file should be overwriten.
-                If 'filename' is None, then this option has no effect.
+                If 'filename' is provided, and exists, then this option defines if the file
+                should be overwriten. If 'filename' is None, then this option has no effect.
         """
         i = 1
         if filename is not None:
@@ -197,7 +224,8 @@ class Callib(object):
                 if replace:
                     filename.unlink()
                 else:
-                    raise FileExistsError(f"The file {filename} exists and the replacing option has not been set.")
+                    raise FileExistsError(f"The file {filename} exists and the replacing option " \
+                                          "has not been set.")
         else:
             filename = Path(str(self.filename) + ".{i}")
             while filename.exists():
@@ -217,7 +245,11 @@ class Callib(object):
                 if 'caltable' in a_step.parameters:
                     callib_file.write(f"{a_step.parameters}\n")
                 else:
-                    callib_file.write(f"caltable='{a_step.caltable}' {a_step.parameters}\n")
+                    callib_file.write(' '.join([f"{k}='{a_step.parameters[k]}'" if k != 'spwmap' \
+                          else f"{k}=[{','.join(str(kk) for kk in a_step.parameters[k])}]" \
+                               for k in a_step.parameters]))
+                    # This guarantees no spaces in the spwmap print list. Easier when importing
+
 
     def import_from_file(self, filename: Optional[Union[Path, str]] = None):
         if filename is None:
@@ -232,8 +264,16 @@ class Callib(object):
                 elif ongoing:
                     entry_caltable, *entry_params = aline.split(' ')
                     entry_caltable = entry_caltable.strip().replace("'", "").split('=')[1]
-                    self.entries.add(CallibEntry(entry_name, entry_caltable,
-                                                 ' '.join(entry_params).strip()))
+                    params = {}
+                    for an_entry in entry_params:
+                        key, val = an_entry.strip().replace("'", "").split('=')
+                        if key == 'spwmap':
+                            params[key] = \
+                                [int(v) for v in val.replace('[', '').replace(']', '').split(',')]
+                        else:
+                            params[key] = val
+
+                    self.entries.add(CallibEntry(entry_name, entry_caltable, params))
                     ongoing = False
 
 
@@ -324,7 +364,7 @@ class Calibration(object):
             casatasks.gencal(vis=str(self._ms.msfile), caltable=str(caltsys),
                              caltype='tsys', uniform=False)
             self.callib.new_entry(name='tsyscal', caltable=str(caltsys), \
-                                  parameters="tinterp='nearest' finterp='nearest'")
+                                  parameters={"tinterp": 'nearest', "finterp": 'nearest'})
             print(f"Tsys calibration table {caltsys} properly generated.")
             self._ms.logger.debug(f"New Calibration Table: {caltsys}.")
         else:
@@ -334,7 +374,7 @@ class Calibration(object):
             print(f"Generating GC calibration table {calgc}.")
             casatasks.gencal(vis=str(self._ms.msfile), caltable=str(calgc), caltype='gc')
             self.callib.new_entry(name='gccal', caltable=str(calgc),
-                                  parameters="tinterp='nearest' ")
+                                  parameters={"tinterp": 'nearest'})
             print(f"GC calibration table {calgc} properly generated.")
             self._ms.logger.debug(f"New Calibration Table: {calgc}.")
         else:
@@ -364,7 +404,7 @@ class Calibration(object):
                                 caltable=accor_caltable_smooth, smoothtype='median',
                                 smoothtime=1800.0)
             self.callib.new_entry(name='accor', caltable=str(accor_caltable_smooth),
-                                  parameters="tinterp='nearest'  finterp='linear'")
+                                  parameters={"tinterp": 'nearest', "finterp": 'linear'})
             print(f"ACCOR calibration table {accor_caltable_smooth} properly generated.")
         else:
             print(f"{accor_caltable_smooth} (ACCOR corrections) already exists. " \
@@ -390,7 +430,7 @@ class Calibration(object):
             casatasks.gencal(vis=str(self._ms.msfile), caltable=str(caltec),
                              infile=f"{imtec}.IGS_TEC.im", caltype='tecim')
             self.callib.new_entry(name='teccor', caltable=str(caltec),
-                                  parameters="")
+                                  parameters={})
             print(f"Ionospheric TEC correction {caltec} properly generated.")
         else:
             print(f"{caltec} (ionospheric corrections) already exists. "
@@ -437,7 +477,7 @@ class Calibration(object):
         for the given reference antenna, this will give the full list of available antennas,
         sorted with the reference antennas first, and later a manually-prioritized list.
         """
-        full_antenna_list = ['EF', 'YS', 'GB', 'O8', 'JB', 'LA', 'NL', 'SR', 'MC']
+        full_antenna_list = ['EF', 'YS', 'GB', 'O8', 'JB', 'FD', 'PT', 'LA', 'OV', 'NL', 'SR', 'MC']
         sorted_antenna_list = list(self._ms.refant)
 
         # First priotizes the antennas with full bandwidth
@@ -487,6 +527,7 @@ class Calibration(object):
                                 refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
                                 gaintable=self.callib.gaintables(),
                                 interp=self.callib.interps(), #weightfactor=1,
+                                spwmap=self.callib.spwmaps(),
                                 # TODO: weightit not implemented yet in the stable release
                                 corrdepflags=True, parang=True)
             # casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
@@ -496,7 +537,7 @@ class Calibration(object):
             #                     docallib=True,
             #                     callib=str(self.callib.filename), corrdepflags=True, parang=True)
             self.callib.new_entry(name='sbd', caltable=str(cals['sbd']),
-                                  parameters="tinterp='nearest'")
+                                  parameters={"tinterp": 'nearest'})
 
         self._verify([cals['sbd']])
 
@@ -511,11 +552,11 @@ class Calibration(object):
                                 refant=','.join(self.prioritize_ref_antennas()), combine='spw',
                                 minsnr=3, gaintable=self.callib.gaintables(), #weightfactor=1, TODO
                                 interp=self.callib.interps(), corrdepflags=True,
-                                parang=True)
+                                spwmap=self.callib.spwmaps(), parang=True)
             spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd']))
             self.callib.new_entry(name='mbd', caltable=str(cals['mbd']),
-                                  parameters="tinterp='linear' " \
-                                             f"spwmap={self._ms.freqsetup.n_subbands*[spw_with_solutions]}")
+                                  parameters={"tinterp": 'linear', "spwmap": \
+                                        f"{self._ms.freqsetup.n_subbands*[spw_with_solutions]}"})
 
         self._verify([cals['mbd']])
 
@@ -526,10 +567,11 @@ class Calibration(object):
             casatasks.bandpass(vis=str(self._ms.msfile),
                                field=','.join(self._ms.sources.fringe_finders.names), fillgaps=16,
                                combine='scan', caltable=str(cals['bp']), docallib=True,
+                               corrdepflags=True,
                                callib=str(self.callib.filename), solnorm=True, solint='inf',
                                refant=','.join(self._ms.refant), bandtype='B', parang=True)
             self.callib.new_entry(name='bandpass', caltable=str(cals['bp']),
-                                  parameters="tinterp='linear' finterp='linear'")
+                                  parameters={"tinterp": 'linear', "finterp": 'linear'})
 
         self._verify([cals['bp']])
 
@@ -557,9 +599,10 @@ class Calibration(object):
                                 timerange=self.get_sbd_timerange(), solint='inf', zerorates=True,
                                 refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
                                 gaintable=self.callib.gaintables(), #weightfactor=1,
-                                interp=self.callib.interps(), corrdepflags=True, parang=True)
+                                interp=self.callib.interps(), corrdepflags=True,
+                                spwmap=self.callib.spwmaps(), parang=True)
             self.callib.new_entry(name='sbd2', caltable=str(cals['sbd2']),
-                                  parameters="tinterp='nearest'")
+                                  parameters={"tinterp" :'nearest'})
 
         self._verify([cals['sbd2']])
 
@@ -573,11 +616,12 @@ class Calibration(object):
                                 solint='inf', zerorates=False, minsnr=5,
                                 refant=','.join(self.prioritize_ref_antennas()), combine='spw',
                                 gaintable=self.callib.gaintables(), #weightfactor=1,
-                                interp=self.callib.interps(), corrdepflags=True, parang=True)
+                                interp=self.callib.interps(), corrdepflags=True,
+                                spwmap=self.callib.spwmaps(), parang=True)
         spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd2']))
         self.callib.new_entry(name='mbd2', caltable=str(cals['mbd2']),
-                              parameters="tinterp='linear' " \
-                                         f"spwmap={self._ms.freqsetup.n_subbands*[spw_with_solutions]}")
+                              parameters={"tinterp": 'linear', "spwmap": \
+                                    f"{self._ms.freqsetup.n_subbands*[spw_with_solutions]}"})
 
         self._verify([cals['mbd2']])
 
@@ -587,6 +631,7 @@ class Calibration(object):
         """
         return casatasks.applycal(vis=str(self._ms.msfile), docallib=True,
                            callib=str(self.callib.filename), parang=True)
+
 
     def clearcal(self, **kwargs):
         """Re-initializes the calibration for a visibility data set.
