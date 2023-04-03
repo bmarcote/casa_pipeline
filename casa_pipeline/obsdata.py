@@ -11,8 +11,8 @@ import datetime as dt
 import numpy as np
 from enum import IntEnum
 from pathlib import Path
-from concurrent import futures
-from threading import Lock
+# from concurrent import futures
+# from threading import Lock
 from typing import Optional, Iterable, NoReturn, List, Union, Tuple
 from dataclasses import dataclass
 from collections import defaultdict
@@ -28,6 +28,7 @@ from rich import progress
 from astropy import coordinates as coord
 from casa_pipeline.casavlbitools import fitsidi
 from casa_pipeline.casa_pipeline import tools
+from casa_pipeline.casa_pipeline import check_antab_idi
 # from .calibration import Calibration
 # from . import flagging
 # from . import imaging
@@ -962,8 +963,8 @@ class Importing(object):
         pass
 
 
-    def evn_fitsidi(self, fitsidifiles: Union[list, str], ignore_antab=False,
-                           ignore_uvflg=False, delete=False, replace_tsys=False):
+    def evn_fitsidi(self, fitsidifiles: Union[list, str, None] = None, ignore_antab: bool = False,
+                    ignore_uvflg: bool = False, delete: bool = False, replace_tsys: bool = False):
         """Imports the provided FITS-IDI files from an EVN observation into a single MS file.
         If checks if the FITS-IDI files already contain the Tsys and GC tables. Otherwise, it
         will first append such information and then import the files.
@@ -972,9 +973,11 @@ class Importing(object):
         .flag file.
 
         Inputs
-            fitsidifiles : list or str
+            fitsidifiles : list or str  (default: None)
                 If str, it will retrieve all files that match the given path/name.
                 If list, it must be an ordered list of all FITS-IDI files that will be imported.
+                If None, then it will assume that the FITS-IDI files are in the current directory
+                with the name '<projectname>_1_1.IDI*'.
             ignore_antab : bool (default False)
                 If the FITS-IDI files should be imported into a MS without caring about the ANTAB
                 information (not recommended).
@@ -996,7 +999,10 @@ class Importing(object):
 
         # First run the Tsys and GC appending to the FITS-IDI. These functions will do nothing
         # if the information is already there.
-        if isinstance(fitsidifiles, str):
+        if fitsidifiles is None:
+            fitsidifiles = sorted(glob.glob(f"{self._ms.prefixname.lower()}_1_1.IDI*"),
+                                  key=natsort_keygen())
+        elif isinstance(fitsidifiles, str):
             fitsidifiles = sorted(glob.glob(fitsidifiles), key=natsort_keygen())
         elif isinstance(fitsidifiles, list):
             fitsidifiles = sorted(fitsidifiles, key=natsort_keygen())
@@ -1016,15 +1022,20 @@ class Importing(object):
         uvflgfile = self._ms.cwd / Path(f"{self._ms.prefixname.lower()}.uvflg")
         flagfile = self._ms.cwd / Path(f"{self._ms.prefixname.lower()}.flag")
         if not ignore_antab:
-            assert antabfile.exists(), \
-                   f"The associated file {antabfile} should exist but was not found."
-            rprint("[bold]Appending the Tsys values to the FITS-IDI files[/bold]")
-            try:
-                fitsidi.append_tsys(str(antabfile), fitsidifiles, replace=replace_tsys)
-                rprint("[bold]Appending the GC values to the FITS-IDI files[/bold]")
-                fitsidi.append_gc(str(antabfile), fitsidifiles[0], replace=replace_tsys)
-            except RuntimeError as e:
-                rprint(f"[yellow]{e}[/yellow]")
+            if antabfile.exists():
+                rprint("[bold]Appending the Tsys values to the FITS-IDI files[/bold]")
+                try:
+                    fitsidi.append_tsys(str(antabfile), fitsidifiles, replace=replace_tsys)
+                    rprint("[bold]Appending the GC values to the FITS-IDI files[/bold]")
+                    fitsidi.append_gc(str(antabfile), fitsidifiles[0], replace=replace_tsys)
+                except RuntimeError as e:
+                    rprint(f"[yellow]{e}[/yellow]")
+            else:
+                assert all(map(check_antab_idi.check_consistency,
+                               [afile for afile in fitsidifiles if afile.endswith('IDI1') \
+                                                                or afile.endswith('IDI')])), \
+                        "The FITS-IDI files do not have stored the Tsys/Gain Curve information, " \
+                        "and no '.antab' file has been found in the current directory."
 
         if (not ignore_uvflg) and (not flagfile.exists()):
             assert uvflgfile.exists(), \
