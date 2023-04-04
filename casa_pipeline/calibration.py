@@ -227,10 +227,10 @@ class Callib(object):
                     raise FileExistsError(f"The file {filename} exists and the replacing option " \
                                           "has not been set.")
         else:
-            filename = Path(str(self.filename) + ".{i}")
+            filename = Path(str(self.filename) + f".{i}")
             while filename.exists():
                 i += 1
-                filename = Path(str(self.filename) + ".{i}")
+                filename = Path(str(self.filename) + f".{i}")
 
         with open(self.filename, 'r') as fin, open(filename, 'w') as fout:
             fout.write(fin.read())
@@ -556,7 +556,7 @@ class Calibration(object):
             spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd']))
             self.callib.new_entry(name='mbd', caltable=str(cals['mbd']),
                                   parameters={"tinterp": 'linear', "spwmap": \
-                                        f"{self._ms.freqsetup.n_subbands*[spw_with_solutions]}"})
+                                        self._ms.freqsetup.n_subbands*[spw_with_solutions]})
 
         self._verify([cals['mbd']])
 
@@ -567,7 +567,7 @@ class Calibration(object):
             casatasks.bandpass(vis=str(self._ms.msfile),
                                field=','.join(self._ms.sources.fringe_finders.names), fillgaps=16,
                                combine='scan', caltable=str(cals['bp']), docallib=True,
-                               corrdepflags=True,
+                               corrdepflags=True, minsnr=3, minblperant=2,
                                callib=str(self.callib.filename), solnorm=True, solint='inf',
                                refant=','.join(self._ms.refant), bandtype='B', parang=True)
             self.callib.new_entry(name='bandpass', caltable=str(cals['bp']),
@@ -621,16 +621,21 @@ class Calibration(object):
         spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd2']))
         self.callib.new_entry(name='mbd2', caltable=str(cals['mbd2']),
                               parameters={"tinterp": 'linear', "spwmap": \
-                                    f"{self._ms.freqsetup.n_subbands*[spw_with_solutions]}"})
+                                    self._ms.freqsetup.n_subbands*[spw_with_solutions]})
 
         self._verify([cals['mbd2']])
 
 
-    def apply_calibration(self):
+    def apply_calibration(self, callib: Union[str, Path, None] = None):
         """Applies the current calibration by using the tables written in the callib.
         """
+        if callib is None:
+            callib = str(self.callib.filename)
+        elif isinstance(callib, Path):
+            callib = str(callib)
+
         return casatasks.applycal(vis=str(self._ms.msfile), docallib=True,
-                           callib=str(self.callib.filename), parang=True)
+                                  callib=callib, parang=True)
 
 
     def clearcal(self, **kwargs):

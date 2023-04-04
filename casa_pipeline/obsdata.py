@@ -951,16 +951,43 @@ class Importing(object):
         # TODO: LBA import in CASA?
         raise NotImplementedError
 
-    def evn_download(self, projectcode: str = None, username: str = None, password: str = None):
+    def evn_download(self, obsdate: str, projectcode: str = None, username: str = None,
+                     password: str = None):
         """Downloads the data files associated with the given EVN project.
         It will download the associated FITS-IDI files, and the associated .antab and .uvflg files.
 
         Inputs
+            obsdate : str
+                String with the observing date, in the format YYMMDD.
             projectcode : str  (default = None)
-                Project code of the
+                Project code of the experiment to download. If None, assumes the same as the
+                project code.
+            username : str  (default: None)
+                Username required to download the data, if they are still private.
+                If None, assumes that no credentials are needed because the proprieatary period
+                already expired.
+            password : str  (default: None)
+                Password required to download the data, if they are still private.
+                If None, assumes that no credentials are needed because the proprieatary period
+                already expired.
         """
-        # TODO: Do I need the observing epoch?
-        pass
+        params = []
+        expname = projectcode if projectcode is not None else self._ms.prefixname
+
+        if None not in (username, password):
+            params += ["--http-user", username, "--http-passwd", password]
+
+        params += ["-t45", "-l1", "-r", "-nd", "archive.jive.nl/exp/" \
+                   f"{expname.upper()}_{obsdate}/fits -A '{expname.lower()}*'"]
+
+        tools.shell_command("wget", params)
+        tools.shell_command("md5sum", ["-c", f"{expname.lower()}.checksum"])
+        # TODO: verify here that all files are OK!
+        tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
+                                     f"pipe/{expname.lower()}.antab.gz"])
+        # TODO: if ERROR 404: Not Found, then go for the _1, _2,...
+        tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
+                                     f"pipe/{expname.lower()}.uvflg"])
 
 
     def evn_fitsidi(self, fitsidifiles: Union[list, str, None] = None, ignore_antab: bool = False,

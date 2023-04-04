@@ -295,12 +295,12 @@ class Project(object):
     #         s += term.bright_black('') + f"\n"
     #         s_file += [f""]
     #         s += term.bright_black('') + f"\n"
-    #         s_file += [f""]
+    #         s_file + [f""]
     #         s += term.bold_green('SOURCES\n')
         s_file += [f"Central frequency: {self.freqsetup.frequency:.2}"]
         s_file += [f"With a bandwith of {self.freqsetup.bandwidth.to(u.MHz)} divided in " \
-                   f"{self.freqsetup.n_subbands} x {self.freqsetup.bandwidth_per_subband.to(u.MHz)} " \
-                   f"subbands."]
+                   f"{self.freqsetup.n_subbands} x {self.freqsetup.bandwidth_per_subband.to(u.MHz)}" \
+                   f" subbands."]
         s_file += [f"{self.freqsetup.channels} spectral channels per subband.\n"]
 
         s_file += ["## Sources"]
@@ -318,14 +318,18 @@ class Project(object):
         longest_src_name = max([len(s) for s in self.sources.names])
         for src in self.sources:
     #             s += term.bright_black(f"{src.name}: ") + f"src.coordinates.\n"
-            s_file += [f"{src.name}:{' '*(longest_src_name-len(src.name))} {src.coordinates.to_string('hmsdms')}"]
+            s_file += [f"{src.name}:{' '*(longest_src_name-len(src.name))} " \
+                       f"{src.coordinates.to_string('hmsdms')}"]
     #
     #
         s_file += ["\n## Antennas"]
         s_file += ["   Did Observe?  Subbands"]
         for ant in self.antennas:
-            s_file += [f"{ant.name} {'yes' if ant.observed else 'no '} " \
-                       f"{' '*(3*(ant.subbands[0]))}{ant.subbands}"]
+            if ant.observed:
+                s_file += [f"{ant.name} yes " \
+                           f"{' '*(3*(ant.subbands[0]))}{ant.subbands}"]
+            else:
+                s_file += [f"{ant.name} no"]
 
         if outfile is not None:
             with open(outfile, 'w') as fout:
