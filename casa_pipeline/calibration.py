@@ -242,13 +242,11 @@ class Callib(object):
         with open(self.filename, 'w') as callib_file:
             for a_step in self.entries:
                 callib_file.write(f"# {a_step.name}\n")
-                if 'caltable' in a_step.parameters:
-                    callib_file.write(f"{a_step.parameters}\n")
-                else:
-                    callib_file.write(' '.join([f"{k}='{a_step.parameters[k]}'" if k != 'spwmap' \
-                          else f"{k}=[{','.join(str(kk) for kk in a_step.parameters[k])}]" \
-                               for k in a_step.parameters]))
-                    # This guarantees no spaces in the spwmap print list. Easier when importing
+                callib_file.write(f"caltable='{a_step.caltable}' ")
+                callib_file.write(' '.join([f"{k}='{a_step.parameters[k]}'" if k != 'spwmap' \
+                      else f"{k}=[{','.join(str(kk) for kk in a_step.parameters[k])}]" \
+                           for k in a_step.parameters]) + '\n')
+                # This guarantees no spaces in the spwmap print list. Easier when importing
 
 
     def import_from_file(self, filename: Optional[Union[Path, str]] = None):

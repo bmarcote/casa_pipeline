@@ -908,20 +908,32 @@ class Ms(object):
             for source in sources:
                 assert source in self.sources, \
                        f"The passed source {source} is not in the MS {self.msfile}."
+        else:
+            sources = self.sources.names
 
         if chanbin == -1 or chanbin > 1:
             kwargs['chanaverage'] = True
             kwargs['chanbin'] = self.freqsetup.channels
 
-        for a_source in self.sources.names if sources is None else sources:
+        suffix = 1
+        while any([os.path.isdir(f"{self.prefixname}.{a_source}" \
+                   f"{'' if suffix == 1 else '.'+str(suffix)}.ms") for a_source in sources]):
+            suffix += 1
+
+        for a_source in sources:
             np.int = int
             np.float = float  # these two is because CASA uses deprecated types in newer numpy ver!
-            casatasks.mstransform(vis=str(self.msfile),
-                                  outputvis=f"{self.prefixname}.{a_source}.ms",
-                                  field=a_source, keepflags=keepflags, **kwargs)
-            splits[a_source] = Ms(f"{self.prefixname}.{a_source}", cwd=self.cwd,
-                                  params=self._params, logger=self._logger)
-            self.splits[a_source].append(splits[a_source])
+            try:
+                casatasks.mstransform(vis=str(self.msfile),
+                                      outputvis=f"{self.prefixname}.{a_source}" \
+                                                f"{'' if suffix == 1 else '.'+str(suffix)}.ms",
+                                      field=a_source, keepflags=keepflags, **kwargs)
+                splits[a_source] = Ms(f"{self.prefixname}.{a_source}", cwd=self.cwd,
+                                      params=self._params, logger=self._logger)
+                self.splits[a_source].append(splits[a_source])
+            except:
+                rprint(f"[bold red]Could not create a split MS file for {a_source}.[/bold red]")
+
         return splits
 
 

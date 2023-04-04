@@ -283,7 +283,7 @@ class Project(object):
         s_file = []
     #     with term.fullscreen(), term.cbreak():
     #         s = term.white_on_red(term.center(term.bold(f"--- {self.projectname} ---")))
-        s_file += [f"# {self.projectname}"]
+        s_file += [f"# {self.projectname.upper()}"]
     #         s += f"{term.normal}\n\n{term.normal}"
     #         s += term.bold_green('General Information\n')
     #         s += ["## General Information"]
@@ -298,10 +298,12 @@ class Project(object):
     #         s_file + [f""]
     #         s += term.bold_green('SOURCES\n')
         s_file += [f"Central frequency: {self.freqsetup.frequency:.2}"]
-        s_file += [f"With a bandwith of {self.freqsetup.bandwidth.to(u.MHz)} divided in " \
+        s_file += [f"With a bandwidth of {self.freqsetup.bandwidth.to(u.MHz)} divided in " \
                    f"{self.freqsetup.n_subbands} x {self.freqsetup.bandwidth_per_subband.to(u.MHz)}" \
                    f" subbands."]
         s_file += [f"{self.freqsetup.channels} spectral channels per subband.\n"]
+
+        s_file += [f"Time range: {self.timerange[0]} to {self.timerange[1]}\n"]
 
         s_file += ["## Sources"]
     #         s += term.bright_black('Fringe finders: ') + \
