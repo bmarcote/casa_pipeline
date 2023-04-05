@@ -185,17 +185,15 @@ class Callib(object):
         if name == 'all':
             if files:
                 for caltable in self._entries.caltables:
-                    if os.path.isdir(caltable):
-                        shutil.rmtree(caltable)
+                    remove_if_exists(caltable)
 
             self._entries = CallibEntries()
         else:
-            if files:
-                caltable = self._entries[name].caltable
-                if os.path.isdir(caltable):
-                    shutil.rmtree(caltable)
+            if name in self._entries:
+                if files:
+                    remove_if_exists(self._entries[name].caltable)
 
-            self._entries.__delitem__(name)
+                self._entries.__delitem__(name)
 
         self.update_file()
 
@@ -283,7 +281,7 @@ def remove_if_exists(a_table: Union[Path, str]):
         a_table = Path(a_table)
 
     if a_table.exists():
-        print(f"{a_table} exists and will be removed and overwriten.")
+        print(f"{a_table} exists and will be removed.")
         shutil.rmtree(a_table)
 
 
@@ -354,8 +352,8 @@ class Calibration(object):
 
         self._ms.logger.info(f"Running calibration.a_priori_calibration (replace={replace})")
         if replace:
-            remove_if_exists(caltsys)
-            remove_if_exists(calgc)
+            self.callib.remove_entry('tsys', files=True)
+            self.callib.remove_entry('gc', files=True)
 
         if not caltsys.exists():
             print(f"Generating the Tsys calibration table {caltsys}.")
@@ -392,7 +390,7 @@ class Calibration(object):
 
         if replace:
             remove_if_exists(accor_caltable)
-            remove_if_exists(accor_caltable_smooth)
+            self.callib.remove_entry('accor', files=True)
 
         if not accor_caltable_smooth.exists():
             print(f"Generating ACCOR calibration table {accor_caltable_smooth}.")
@@ -419,8 +417,8 @@ class Calibration(object):
         imtec  = self.caldir / f"{str(self._ms.prefixname).lower()}"
 
         if replace:
-            remove_if_exists(caltec)
             remove_if_exists(imtec)
+            self.callib.remove_entry('teccor', files=True)
 
         if not caltec.exists():
             print("Calibrating the ionospheric TEC influence.")
@@ -511,7 +509,7 @@ class Calibration(object):
 
         if replace:
             for cal in cals:
-                remove_if_exists(cals[cal])
+                self.callib.remove_entry(cal, files=True)
 
         if cals['sbd'].exists():
             print("No instrumental delay calibration performed as the table "
@@ -578,7 +576,6 @@ class Calibration(object):
         """Runs the main calibration of the data:
         - instrumental delay corrections: in the specified time range.
         - global fringe fit: on all calibrators (and target if no phase-referencing is used).
-        - bandpass calibration: using the bandpass calibrators.
         """
         #TODO: add the possibility of using a source model for fringe.
         cals = {'sbd2': self.caldir/f"{str(self._ms.prefixname).lower()}.sbd2",
@@ -622,6 +619,39 @@ class Calibration(object):
                                     self._ms.freqsetup.n_subbands*[spw_with_solutions]})
 
         self._verify([cals['mbd2']])
+
+    def bandpass(self, bpver=None, replace=False, fillgaps=16, combine='scan',
+                 corrdepflags=True, minsnr=3, minblperant=2, solnorm=True, solint='inf',
+                 bandtype='B', parang=True, **kwargs):
+        if bpver is not None:
+            calbp = self.caldir / f"{str(self._ms.prefixname).lower()}.bp{bpver}"
+            assert (not calbp.exists()) or replace, \
+                   f"The calibration table {bpver} exists and shall not be replaced."
+        else:
+            bpver = 1
+            calbp = self.caldir / f"{str(self._ms.prefixname).lower()}.bp"
+            if not replace:
+                while calbp.exists():
+                    bpver += 1
+                    calbp = self.caldir / f"{str(self._ms.prefixname).lower()}.bp{bpver}"
+
+        if 'field' not in kwargs:
+            kwargs['field'] =  ','.join(self._ms.sources.fringe_finders.names)
+
+        if 'refant' not in kwargs:
+            kwargs['refant'] = ','.join(self._ms.refant)
+
+        rprint("[bold]Running bandpass calibration.[/bold]")
+        casatasks.bandpass(vis=str(self._ms.msfile), fillgaps=fillgaps,
+                           combine=combine, caltable=str(calbp), docallib=True,
+                           corrdepflags=corrdepflags, minsnr=minsnr, minblperant=minblperant,
+                           callib=str(self.callib.filename), solnorm=solnorm, solint=solint,
+                           bandtype=bandtype, parang=parang, **kwargs)
+        self.callib.new_entry(name=f"bandpass{str(bpver) if bpver > 1 else ''}",
+                              caltable=str(calbp),
+                              parameters={"tinterp": 'linear', "finterp": 'linear'})
+
+        self._verify([calbp])
 
 
     def apply_calibration(self, callib: Union[str, Path, None] = None):
