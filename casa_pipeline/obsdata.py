@@ -997,6 +997,7 @@ class Importing(object):
         # TODO: verify here that all files are OK!
         tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
                                      f"pipe/{expname.lower()}.antab.gz"])
+        tools.shell_command("gunzip", [f"{expname.lower()}.antab.gz"])
         # TODO: if ERROR 404: Not Found, then go for the _1, _2,...
         tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
                                      f"pipe/{expname.lower()}.uvflg"])
