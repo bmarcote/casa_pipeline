@@ -495,7 +495,7 @@ class Calibration(object):
         return sorted_antenna_list
 
 
-    def main_calibration(self, replace=False):
+    def main_calibration(self, replace=False, fixed_fringe_callib=False):
         """Runs the main calibration of the data:
         - instrumental delay corrections: in the specified time range.
         - global fringe fit: on all calibrators (and target if no phase-referencing is used).
@@ -517,21 +517,24 @@ class Calibration(object):
         else:
             rprint("[bold]Running fringefit for instrumental delay correction.[/bold]")
             # TODO: this is a patch because currently fringe-fit breaks with callib.... :-(
-            casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
-                                timerange=self.get_sbd_timerange(),
-                                solint='inf', zerorates=True,
-                                refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
-                                gaintable=self.callib.gaintables(),
-                                interp=self.callib.interps(), #weightfactor=1,
-                                spwmap=self.callib.spwmaps(),
-                                # TODO: weightit not implemented yet in the stable release
-                                corrdepflags=True, parang=True)
-            # casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
-            #                     timerange=self.get_sbd_timerange(),
-            #                     solint='inf', zerorates=True,
-            #                     refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
-            #                     docallib=True,
-            #                     callib=str(self.callib.filename), corrdepflags=True, parang=True)
+            if fixed_fringe_callib:
+                casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
+                                    timerange=self.get_sbd_timerange(),
+                                    solint='inf', zerorates=True,
+                                    refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
+                                    docallib=True,
+                                    callib=str(self.callib.filename), corrdepflags=True, parang=True)
+            else:
+                casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
+                                    timerange=self.get_sbd_timerange(),
+                                    solint='inf', zerorates=True,
+                                    refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
+                                    gaintable=self.callib.gaintables(),
+                                    interp=self.callib.interps(), #weightfactor=1,
+                                    spwmap=self.callib.spwmaps(),
+                                    # TODO: weightit not implemented yet in the stable release
+                                    corrdepflags=True, parang=True)
+
             self.callib.new_entry(name='sbd', caltable=str(cals['sbd']),
                                   parameters={"tinterp": 'nearest'})
 
@@ -542,13 +545,23 @@ class Calibration(object):
                   f"{cals['mbd']} already exists.")
         else:
             rprint("[bold]Running fringefit for multi-band delay correction.[/bold]")
-            casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['mbd']),
-                                field=','.join(self._ms.sources.all_calibrators.names),
-                                solint='inf', zerorates=False,
-                                refant=','.join(self.prioritize_ref_antennas()), combine='spw',
-                                minsnr=3, gaintable=self.callib.gaintables(), #weightfactor=1, TODO
-                                interp=self.callib.interps(), corrdepflags=True,
-                                spwmap=self.callib.spwmaps(), parang=True)
+            if fixed_fringe_callib:
+                casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['mbd']),
+                                    field=','.join(self._ms.sources.all_calibrators.names),
+                                    solint='inf', zerorates=False,
+                                    refant=','.join(self.prioritize_ref_antennas()), combine='spw',
+                                    minsnr=3, gaintable=self.callib.gaintables(), #weightfactor=1, TODO
+                                    docallib=True,
+                                    callib=str(self.callib.filename), corrdepflags=True, parang=True)
+            else:
+                casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['mbd']),
+                                    field=','.join(self._ms.sources.all_calibrators.names),
+                                    solint='inf', zerorates=False,
+                                    refant=','.join(self.prioritize_ref_antennas()), combine='spw',
+                                    minsnr=3, gaintable=self.callib.gaintables(), #weightfactor=1, TODO
+                                    interp=self.callib.interps(), corrdepflags=True,
+                                    spwmap=self.callib.spwmaps(), parang=True)
+
             spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd']))
             self.callib.new_entry(name='mbd', caltable=str(cals['mbd']),
                                   parameters={"tinterp": 'linear', "spwmap": \
