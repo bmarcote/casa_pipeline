@@ -13,6 +13,7 @@ from casatasks.private import tec_maps
 from casatools import table as tb
 # from casatools import msmetadata as msmd
 from . import obsdata
+from . import tec_maps as jack_tec_maps
 
 """Diferent functions that can be used directly from this module in order to calibrate the data.
 Later on a class Calibration is defined, which will use these functions but by using the
@@ -409,22 +410,27 @@ class Calibration(object):
         self._verify([accor_caltable_smooth, ])
 
 
-    def ionospheric_corrections(self, replace=False):
+    def ionospheric_corrections(self, replace=False, jack_version=True):
         """Runs the ionospheric calibration if required (i.e. if the observation was conducted
         at less than 6 GHz). This can also be turned off in the input parameter files.
         """
         caltec = self.caldir / f"{str(self._ms.prefixname).lower()}.tec"
         imtec  = self.caldir / f"{str(self._ms.prefixname).lower()}"
-
         if replace:
-            remove_if_exists(imtec)
+            remove_if_exists(caltec)
             self.callib.remove_entry('teccor', files=True)
 
         if not caltec.exists():
             print("Calibrating the ionospheric TEC influence.")
-            tec_maps.create(vis=str(self._ms.msfile), doplot=False, imname=str(imtec))
-            casatasks.gencal(vis=str(self._ms.msfile), caltable=str(caltec),
-                             infile=f"{imtec}.IGS_TEC.im", caltype='tecim')
+            if jack_version:
+                casa_image, *_ = jack_tec_maps.create0(str(self._ms.msfile), 'IGS')
+                casatasks.gencal(vis=str(self._ms.msfile), caltable=str(caltec),
+                                 infile=casa_image, caltype='tecim')
+            else:
+                tec_maps.create(vis=str(self._ms.msfile), doplot=False, imname=str(imtec))
+                casatasks.gencal(vis=str(self._ms.msfile), caltable=str(caltec),
+                                 infile=f"{imtec}.IGS_TEC.im", caltype='tecim')
+
             self.callib.new_entry(name='teccor', caltable=str(caltec),
                                   parameters={})
             print(f"Ionospheric TEC correction {caltec} properly generated.")
