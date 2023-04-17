@@ -627,7 +627,7 @@ class Calibration(object):
             rprint("[bold]Running fringefit for a second multi-band delay correction.[/bold]")
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['mbd2']),
                                 field=','.join(self._ms.sources.all_calibrators.names),
-                                solint='inf', zerorates=False, minsnr=5,
+                                solint='inf', zerorates=False, minsnr=3,
                                 refant=','.join(self.prioritize_ref_antennas()), combine='spw',
                                 gaintable=self.callib.gaintables(), #weightfactor=1,
                                 interp=self.callib.interps(), corrdepflags=True,
