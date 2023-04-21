@@ -924,11 +924,11 @@ class Ms(object):
             np.int = int
             np.float = float  # these two is because CASA uses deprecated types in newer numpy ver!
             try:
-                casatasks.mstransform(vis=str(self.msfile),
-                                      outputvis=f"{self.prefixname}.{a_source}" \
-                                                f"{'' if suffix == 1 else '.'+str(suffix)}.ms",
+                ms_name = f"{self.prefixname}.{a_source}" \
+                          f"{'' if suffix == 1 else '.'+str(suffix)}.ms"
+                casatasks.mstransform(vis=str(self.msfile), outputvis=ms_name,
                                       field=a_source, keepflags=keepflags, **kwargs)
-                splits[a_source] = Ms(f"{self.prefixname}.{a_source}", cwd=self.cwd,
+                splits[a_source] = Ms(ms_name, cwd=self.cwd,
                                       params=self._params, logger=self._logger)
                 self.splits[a_source].append(splits[a_source])
             except:
