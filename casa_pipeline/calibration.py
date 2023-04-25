@@ -529,14 +529,14 @@ class Calibration(object):
                 casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
                                     timerange=self.get_sbd_timerange(),
                                     solint='inf', zerorates=True, paramactive=[True, True, dispersive],
-                                    refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
+                                    refant=','.join(self.prioritize_ref_antennas()), minsnr=5, # TODO: put back to 50
                                     docallib=True, delaywindow=[-200, 200], ratewindow=[-5e-8, 5e-8],
                                     callib=str(self.callib.filename), corrdepflags=True, parang=True)
             else:
                 casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
                                     timerange=self.get_sbd_timerange(),
                                     solint='inf', zerorates=True, paramactive=[True, True, dispersive],
-                                    refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
+                                    refant=','.join(self.prioritize_ref_antennas()), minsnr=5,
                                     gaintable=self.callib.gaintables(),
                                     delaywindow=[-200, 200], ratewindow=[-5e-8, 5e-8],
                                     interp=self.callib.interps(), #weightfactor=1,
@@ -616,7 +616,7 @@ class Calibration(object):
             rprint("[bold]Running fringefit for a second instrumental delay correction.[/bold]")
             casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd2']),
                                 timerange=self.get_sbd_timerange(), solint='inf', zerorates=True,
-                                refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
+                                refant=','.join(self.prioritize_ref_antennas()), minsnr=5,
                                 gaintable=self.callib.gaintables(), #weightfactor=1,
                                 delaywindow=[-200, 200], ratewindow=[-5e-8, 5e-8],
                                 interp=self.callib.interps(), corrdepflags=True,
