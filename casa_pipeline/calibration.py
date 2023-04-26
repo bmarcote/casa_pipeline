@@ -396,7 +396,7 @@ class Calibration(object):
         if not accor_caltable_smooth.exists():
             print(f"Generating ACCOR calibration table {accor_caltable_smooth}.")
             casatasks.accor(vis=str(self._ms.msfile), caltable=str(accor_caltable), solint='30s',
-                            docallib=True, callib=str(self.caldir / "cal_library.txt"))
+                            docallib=True, callib=str(self.callib.filename))
             casatasks.smoothcal(vis=str(self._ms.msfile), tablein=accor_caltable,
                                 caltable=accor_caltable_smooth, smoothtype='median',
                                 smoothtime=1800.0)
