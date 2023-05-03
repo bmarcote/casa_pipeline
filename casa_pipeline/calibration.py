@@ -340,9 +340,12 @@ class Calibration(object):
         self._callib = Callib(caldir / f"callib-{self._ms.prefixname}.txt")
         self._sbd_timerange = None
 
+
     def copy_pols(self, antenna: Union[str, obsdata.Antenna], bad_pol: str, new_pol: str):
         """Copies the information from 'new_pol' into 'bad_pol'
         """
+        raise NotImplementedError
+
 
     def a_priori_calibration(self, replace=False):
         """Generates the calibration tables for gain and system temperature.
@@ -381,7 +384,7 @@ class Calibration(object):
         self._verify([caltsys, calgc])
 
 
-    def accor(self, replace=False):
+    def accor(self, replace=False, **kwargs):
         """NOTE: This should never run on EVN data!!!!!!!!!!!!!!!!!!!!!!!!!
 
         It is written here for compatibility and internal tests.
@@ -396,7 +399,8 @@ class Calibration(object):
         if not accor_caltable_smooth.exists():
             print(f"Generating ACCOR calibration table {accor_caltable_smooth}.")
             casatasks.accor(vis=str(self._ms.msfile), caltable=str(accor_caltable), solint='30s',
-                            docallib=True, callib=str(self.callib.filename))
+                            docallib=True, callib=str(self.callib.filename),
+                            **self._ms.params['calibration']['accor'])
             casatasks.smoothcal(vis=str(self._ms.msfile), tablein=accor_caltable,
                                 caltable=accor_caltable_smooth, smoothtype='median',
                                 smoothtime=1800.0)
