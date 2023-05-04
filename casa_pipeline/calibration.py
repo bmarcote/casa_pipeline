@@ -507,7 +507,7 @@ class Calibration(object):
         return sorted_antenna_list
 
 
-    def main_calibration(self, replace=False, fixed_fringe_callib=False, dispersive=False):
+    def main_calibration(self, replace=False, fixed_fringe_callib=False, dispersive=False, parang=True):
         """Runs the main calibration of the data:
         - instrumental delay corrections: in the specified time range.
         - global fringe fit: on all calibrators (and target if no phase-referencing is used).
@@ -535,7 +535,7 @@ class Calibration(object):
                                     solint='inf', zerorates=True, paramactive=[True, True, dispersive],
                                     refant=','.join(self.prioritize_ref_antennas()), minsnr=5, # TODO: put back to 50
                                     docallib=True, delaywindow=[-200, 200], ratewindow=[-5e-8, 5e-8],
-                                    callib=str(self.callib.filename), corrdepflags=True, parang=True)
+                                    callib=str(self.callib.filename), corrdepflags=True, parang=parang)
             else:
                 casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
                                     timerange=self.get_sbd_timerange(),
@@ -546,7 +546,7 @@ class Calibration(object):
                                     interp=self.callib.interps(), #weightfactor=1,
                                     spwmap=self.callib.spwmaps(),
                                     # TODO: weightit not implemented yet in the stable release
-                                    corrdepflags=True, parang=True)
+                                    corrdepflags=True, parang=parang)
 
             self.callib.new_entry(name='sbd', caltable=str(cals['sbd']),
                                   parameters={"tinterp": 'nearest'})
@@ -566,7 +566,7 @@ class Calibration(object):
                                     refant=','.join(self.prioritize_ref_antennas()), combine='spw',
                                     minsnr=3, gaintable=self.callib.gaintables(), #weightfactor=1, TODO
                                     docallib=True,
-                                    callib=str(self.callib.filename), corrdepflags=True, parang=True)
+                                    callib=str(self.callib.filename), corrdepflags=True, parang=parang)
             else:
                 casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['mbd']),
                                     field=','.join(self._ms.sources.all_calibrators.names),
@@ -575,7 +575,7 @@ class Calibration(object):
                                     refant=','.join(self.prioritize_ref_antennas()), combine='spw',
                                     minsnr=3, gaintable=self.callib.gaintables(), #weightfactor=1, TODO
                                     interp=self.callib.interps(), corrdepflags=True,
-                                    spwmap=self.callib.spwmaps(), parang=True)
+                                    spwmap=self.callib.spwmaps(), parang=parang)
 
             spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd']))
             self.callib.new_entry(name='mbd', caltable=str(cals['mbd']),
@@ -593,14 +593,14 @@ class Calibration(object):
                                combine='scan', caltable=str(cals['bp']), docallib=True,
                                corrdepflags=True, minsnr=3, minblperant=2,
                                callib=str(self.callib.filename), solnorm=True, solint='inf',
-                               refant=','.join(self._ms.refant), bandtype='B', parang=True)
+                               refant=','.join(self._ms.refant), bandtype='B', parang=parang)
             self.callib.new_entry(name='bandpass', caltable=str(cals['bp']),
                                   parameters={"tinterp": 'linear', "finterp": 'linear'})
 
         self._verify([cals['bp']])
 
 
-    def recalibration(self, replace=False, dispersive=False):
+    def recalibration(self, replace=False, dispersive=False, parang=True):
         """Runs the main calibration of the data:
         - instrumental delay corrections: in the specified time range.
         - global fringe fit: on all calibrators (and target if no phase-referencing is used).
@@ -624,7 +624,7 @@ class Calibration(object):
                                 gaintable=self.callib.gaintables(), #weightfactor=1,
                                 delaywindow=[-200, 200], ratewindow=[-5e-8, 5e-8],
                                 interp=self.callib.interps(), corrdepflags=True,
-                                spwmap=self.callib.spwmaps(), parang=True)
+                                spwmap=self.callib.spwmaps(), parang=parang)
             self.callib.new_entry(name='sbd2', caltable=str(cals['sbd2']),
                                   parameters={"tinterp" :'nearest'})
 
@@ -642,7 +642,7 @@ class Calibration(object):
                                 gaintable=self.callib.gaintables(), #weightfactor=1,
                                 delaywindow=[-200, 200], ratewindow=[-5e-8, 5e-8],
                                 interp=self.callib.interps(), corrdepflags=True,
-                                spwmap=self.callib.spwmaps(), parang=True)
+                                spwmap=self.callib.spwmaps(), parang=parang)
         spw_with_solutions = get_spw_global_fringe(caltable=str(cals['mbd2']))
         self.callib.new_entry(name='mbd2', caltable=str(cals['mbd2']),
                               parameters={"tinterp": 'linear', "spwmap": \

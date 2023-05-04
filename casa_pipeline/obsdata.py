@@ -1001,7 +1001,15 @@ class Importing(object):
         # TODO: if ERROR 404: Not Found, then go for the _1, _2,...
         tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
                                      f"pipe/{expname.lower()}.uvflg"])
+        # TODO: this only if I need AIPS for ionosphere
+        tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
+                                     f"pipe/{expname.lower()}.tasav.FITS.gz"])
+        tools.shell_command("gunzip", [f"{expname.lower()}.tasav.FITS.gz"])
 
+    def evn_aips_import(self, fitsidifiles: Union[list, str, None] = None, tasav_file: Union[str, None] = None):
+        """Because CASA
+        """
+        pass
 
     def evn_fitsidi(self, fitsidifiles: Union[list, str, None] = None, ignore_antab: bool = False,
                     ignore_uvflg: bool = False, delete: bool = False, replace_tsys: bool = False):
