@@ -1,0 +1,17 @@
+
+
+
+
+
+
+[calibration.accor]
+
+solint = '30s'
+smoothtype = 'median'
+smoothtime = 1800.0
+
+
+[calibration.teccor]
+
+
+

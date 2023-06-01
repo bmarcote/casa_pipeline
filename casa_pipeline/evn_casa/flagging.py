@@ -1,8 +1,8 @@
 import casatasks
-from . import tools
 from pathlib import Path
 from typing import Optional, Iterable, NoReturn, List, Union, Tuple
-from . import obsdata
+from .. import tools
+from .. import obsdata
 
 
 class Flagging(object):

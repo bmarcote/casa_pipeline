@@ -12,8 +12,7 @@ import casatasks
 from casatasks.private import tec_maps
 from casatools import table as tb
 # from casatools import msmetadata as msmd
-from . import obsdata
-from . import tec_maps as jack_tec_maps
+from .. import obsdata
 
 """Diferent functions that can be used directly from this module in order to calibrate the data.
 Later on a class Calibration is defined, which will use these functions but by using the
@@ -414,7 +413,7 @@ class Calibration(object):
         self._verify([accor_caltable_smooth, ])
 
 
-    def ionospheric_corrections(self, replace=False, jack_version=True):
+    def ionospheric_corrections(self, replace=False):
         """Runs the ionospheric calibration if required (i.e. if the observation was conducted
         at less than 6 GHz). This can also be turned off in the input parameter files.
         """
@@ -426,14 +425,9 @@ class Calibration(object):
 
         if not caltec.exists():
             print("Calibrating the ionospheric TEC influence.")
-            if jack_version:
-                casa_image, *_ = jack_tec_maps.create0(str(self._ms.msfile), 'IGS')
-                casatasks.gencal(vis=str(self._ms.msfile), caltable=str(caltec),
-                                 infile=casa_image, caltype='tecim')
-            else:
-                tec_maps.create(vis=str(self._ms.msfile), doplot=False, imname=str(imtec))
-                casatasks.gencal(vis=str(self._ms.msfile), caltable=str(caltec),
-                                 infile=f"{imtec}.IGS_TEC.im", caltype='tecim')
+            tec_maps.create(vis=str(self._ms.msfile), doplot=False, imname=str(imtec))
+            casatasks.gencal(vis=str(self._ms.msfile), caltable=str(caltec),
+                             infile=f"{imtec}.IGS_TEC.im", caltype='tecim')
 
             spw_with_solutions = get_spw_global_fringe(caltable=str(caltec))
             self.callib.new_entry(name='teccor', caltable=str(caltec),

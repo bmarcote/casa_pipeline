@@ -16,8 +16,8 @@ except ModuleNotFoundError:
 
 from astropy import units as u
 from . import obsdata
-from . import calibration
-from . import flagging
+from .evn_casa import calibration
+from .evn_casa import flagging
 from . import plotting
 from . import imaging
 
