@@ -429,10 +429,10 @@ class Calibration(object):
             casatasks.gencal(vis=str(self._ms.msfile), caltable=str(caltec),
                              infile=f"{imtec}.IGS_TEC.im", caltype='tecim')
 
-            spw_with_solutions = get_spw_global_fringe(caltable=str(caltec))
-            self.callib.new_entry(name='teccor', caltable=str(caltec),
-                                  parameters={"spwmap": \
-                                        self._ms.freqsetup.n_subbands*[spw_with_solutions]})
+            # spw_with_solutions = get_spw_global_fringe(caltable=str(caltec))
+            self.callib.new_entry(name='teccor', caltable=str(caltec), parameters={})
+                                  # parameters={"spwmap": \
+                                  #       self._ms.freqsetup.n_subbands*[spw_with_solutions]})
             print(f"Ionospheric TEC correction {caltec} properly generated.")
         else:
             print(f"{caltec} (ionospheric corrections) already exists. "
