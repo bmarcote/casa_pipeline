@@ -1,19 +1,22 @@
 
 # Maybe it should be TOML???
 # https://realpython.com/python-toml/
-
 ---
 project_name: a_name
-target: a_source
-phaseref: a_pcal
-fringefinder: a_ff
+network: evn
+# epoch: DDMMYY
+reference_antenna: "EF"
 
-evn_fitsidi: false
-lba_uvfits: false
+sources:
+  target: a_source
+  phaseref: a_pcal
+  fringefinder: a_ff
+
 
 calibration:
-    do_ionospheric: "default"
-    sbd_timerange: "default"
+  do_ionospheric: "default"
+  sbd_timerange: "default"
 
-quack:
+flagging:
+  quack:
     all: 5.0

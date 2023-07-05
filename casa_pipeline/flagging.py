@@ -1,15 +1,13 @@
 import casatasks
 from pathlib import Path
 from typing import Optional, Iterable, NoReturn, List, Union, Tuple
-from .. import tools
-from .. import obsdata
-
+import casa_pipeline as capi
 
 class Flagging(object):
     """Class that contains all tasks concerning flagging to the data that can be applied to
     a Ms object.
     """
-    def __init__(self, ms: obsdata.Ms):
+    def __init__(self, ms: capi.Project):
         self._ms = ms
 
 
@@ -101,9 +99,9 @@ class Flagging(object):
         If you have a costumized AOflagger strategy file, you can use it.
         """
         if strategy_file is None:
-            tools.shell_command("aoflagger", [str(self._ms.msfile)])
+            capi.tools.shell_command("aoflagger", [str(self._ms.msfile)])
         else:
-            tools.shell_command("aoflagger", ["-strategy", strategy_file, str(self._ms.msfile)])
+            capi.tools.shell_command("aoflagger", ["-strategy", strategy_file, str(self._ms.msfile)])
 
 
     def check_unflagged_data(self):

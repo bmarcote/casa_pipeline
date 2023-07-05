@@ -5,14 +5,19 @@ import os
 import shutil
 from pathlib import Path
 # import subprocess
+import numpy as np
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 from dataclasses import dataclass
 from typing import Optional, Iterable, Union
 from rich import print as rprint
 import casatasks
 from casatasks.private import tec_maps
 from casatools import table as tb
-# from casatools import msmetadata as msmd
-from .. import obsdata
+from casatools import componentlist as cl
+from casatools import msmetadata as msmd
+from casatools import table as tb
+import casa_pipeline as capi
 
 """Diferent functions that can be used directly from this module in order to calibrate the data.
 Later on a class Calibration is defined, which will use these functions but by using the
@@ -333,17 +338,17 @@ class Calibration(object):
         return True
 
 
-    def __init__(self, ms: obsdata.Ms, caldir: Union[str, Path]):
+    def __init__(self, ms: capi.Project, caldir: Union[str, Path]):
         self._ms = ms
         self._caldir = caldir
-        self._callib = Callib(caldir / f"callib-{self._ms.prefixname}.txt")
+        self._callib = Callib(caldir / f"callib-{self._ms.projectname}.txt")
         self._sbd_timerange = None
 
 
-    def copy_pols(self, antenna: Union[str, obsdata.Antenna], bad_pol: str, new_pol: str):
-        """Copies the information from 'new_pol' into 'bad_pol'
-        """
-        raise NotImplementedError
+    # def copy_pols(self, antenna: Union[str, obsdata.Antenna], bad_pol: str, new_pol: str):
+    #     """Copies the information from 'new_pol' into 'bad_pol'
+    #     """
+    #     raise NotImplementedError
 
 
     def a_priori_calibration(self, replace=False):
@@ -683,7 +688,7 @@ class Calibration(object):
         """
         pass
 
-    def apply_calibration(self, callib: Union[str, Path, None] = None):
+    def apply_calibration(self, callib: Union[str, Path, None] = None, parang=True):
         """Applies the current calibration by using the tables written in the callib.
         """
         if callib is None:
@@ -692,13 +697,77 @@ class Calibration(object):
             callib = str(callib)
 
         return casatasks.applycal(vis=str(self._ms.msfile), docallib=True,
-                                  callib=callib, parang=True)
+                                  callib=callib, parang=parang)
 
 
     def clearcal(self, **kwargs):
         """Re-initializes the calibration for a visibility data set.
         """
         casatasks.clearcal(vis=str(self._ms.msfile), **kwargs)
+
+
+    def create_cl_file(difmap_mod_file: str, outfile: str = 'component_list.cl'):
+        """Creates a CASA-compatible file containing the component list of a given model created from Difmap.
+        Code firsly done by Joe Bright during its visit to JIVE in 2022.
+
+        Parameters
+        ----------
+
+        difmap_mod_file : str
+            File containing the model created by Difmap.
+        outfile : str  (optional)
+            Output file to write. By default 'component_list.cl'.
+        """
+
+        with open(difmap_mod_file, 'r') as mymodel:
+            mylines = mymodel.readlines()
+
+            delta_components = []
+            gaussian_components = []
+
+            for line in mylines:
+                if line.startswith('! Center'):
+                    ra, dec = [l.split(':')[1] for l in line.split(',')]
+                    ra = "{}h{}m{}s".format(*ra.split())
+                    dec = "{}d{}m{}s".format(*(dec.split('(')[0][:-1]).split())
+                    map_center = SkyCoord(ra, dec, frame='icrs')
+
+                elif '!' not in line:
+                    simpl_line = " ".join(line.split())
+                    component = simpl_line.replace('v', '').split()
+                    if len(component) == 3:
+                        delta_components.append(component)
+                    if len(component) == 9:
+                        gaussian_components.append(component)
+
+        # cl.open(outfile)
+        for component in delta_components:
+            offset = float(component[1]) / 1000. / 60. / 60. * u.deg
+            angle = float(component[2]) * u.deg
+            print('Component offset ' + str(offset))
+            print('Component angle ' + str(angle))
+            component_coordinate = map_center.directional_offset_by(angle, offset)
+            print('Component coordinate + ' + component_coordinate.to_string('hmsdms'))
+            component_flux = float(component[0])
+            cl.addcomponent(dir='J2000 ' + map_center.to_string('hmsdms'), flux=component_flux, fluxunit='Jy', shape='point')
+
+        for component in gaussian_components:
+            offset = float(component[1]) / 1000. / 60. / 60. * u.deg
+            print(offset)
+            angle = float(component[2]) * u.deg
+            bmaj = float(component[3]) / 1000.
+            bmin = bmaj / float(component[4])
+            ang = float(component[5])
+            component_coordinate = map_center.directional_offset_by(angle, offset)
+            print('Component coordinate ' +  component_coordinate.to_string('hmsdms'))
+            component_flux = float(component[0])
+            cl.addcomponent(dir='J2000 ' + map_center.to_string('hmsdms'), flux=component_flux, fluxunit='Jy',
+                            shape='Gaussian', majoraxis=f"{bmaj}arcsec", minoraxis=f"{bmin}arcsec",
+                            positionangle=f"{ang}deg")
+
+        cl.rename(outfile)
+        cl.close()
+        cl.done()
 
 
     # def self_calibration(project: obsdata.Project, source_model: str, calmode: str, solint: int):

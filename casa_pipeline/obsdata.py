@@ -27,12 +27,8 @@ from rich import progress
 # import blessed
 from astropy import coordinates as coord
 from casa_pipeline.casavlbitools import fitsidi
-from casa_pipeline.casa_pipeline import tools
 from casa_pipeline.casa_pipeline import check_antab_idi
-# from .calibration import Calibration
-# from . import flagging
-# from . import imaging
-# from . import plotting
+import casa_pipeline as capi
 
 
 # Because as far as I know CASA folks do not have a straight away to get this simple information
@@ -72,6 +68,92 @@ class Stokes(IntEnum):
     PFtotal = 30 # Polarization Fraction (Ptotal/I)
     PFlinear = 31 # linear Polarization Fraction (Plinear/I)
     Pangle = 32 # linear polarization angle (0.5  arctan(U/Q)) (in radians)
+
+
+
+class ObsEpoch(object):
+    """
+    """
+    @property
+    def epoch(self) -> dt.date:
+        """Returns the epoch at which the observations were conducted, in datetime.time format.
+        """
+        if self._epoch is None:
+            raise ValueError("The epoch of the observation has not been initialized yet.")
+
+        return self._epoch
+
+    @property
+    def ymd(self) -> str:
+        """Returns the epoch at the (start of) observations, in YYMMDD format.
+        """
+        if self._epoch is None:
+            raise ValueError("The epoch of the observation has not been initialized yet.")
+
+        return self.epoch.strftime('%y%m%d')
+
+    @property
+    def mjd(self) -> int:
+        if self._epoch is None:
+            raise ValueError("The epoch of the observation has not been initialized yet.")
+
+        return int(capi.tools.date2mjd(self.epoch))
+
+    @property
+    def doy(self) -> int:
+        if self._epoch is None:
+            raise ValueError("The epoch of the observation has not been initialized yet.")
+
+        return int(self.epoch.strftime('%j'))
+
+    @property
+    def starttime(self) -> dt.datetime:
+        if self._starttime is None:
+            raise ValueError("The 'start_datetime' has not been initialized yet.")
+
+        return self._starttime
+
+    @starttime.setter
+    def starttime(self, start_datetime: dt.datetime):
+        if self._endtime is not None:
+            assert (self.endtime - start_datetime) > 0, \
+                   "Starting time needs to be earlier than ending time."
+
+        self._starttime = start_datetime
+        self._epoch = self.starttime.date()
+
+    @property
+    def endtime(self) -> dt.datetime:
+        if self._endtime is None:
+            raise ValueError("The 'end_datetime' has not been initialized yet.")
+
+        return self._endtime
+
+    @endtime.setter
+    def endtime(self, end_datetime: dt.datetime):
+        if self._starttime is not None:
+            assert (end_datetime - self.starttime) > 0, \
+                   "Ending time needs to be later than starting time."
+
+        self._endtime = end_datetime
+
+    @property
+    def duration(self) -> u.Quantity:
+        if None in (self._starttime, self._endtime):
+            raise ValueError("The 'end_datetime' and/or 'start_datetime' have not " \
+                             "been initialized yet.")
+
+        return ((self.endtime - self.starttime).total_seconds()*u.s).to(u.hour)
+
+    def __init__(self, start_datetime: dt.datetime = None,
+                 end_datetime: dt.datetime = None):
+        self._starttime = start_datetime
+        self._endtime = end_datetime
+        if self._starttime is not None:
+            self._epoch = self.starttime.date()
+        else:
+            self._epoch = None
+
 
 
 class SourceType(Enum):
@@ -431,13 +513,13 @@ class FreqSetup(object):
     def bandwidth_per_subband(self) -> u.Quantity:
         """Returns the total bandwidth per subband
         """
-        return self._bandwidth_spw
+        return self._bandwidth_spw.to(u.MHz)
 
     @property
     def bandwidth(self) -> u.Quantity:
         """Returns the total bandwidth of the observation
         """
-        return self._bandwidth_spw * self.n_subbands
+        return self._bandwidth_spw.to(u.MHz) * self.n_subbands
 
     @property
     def frequency_range(self) -> tuple[u.Quantity, u.Quantity]:
@@ -484,7 +566,7 @@ class FreqSetup(object):
         return self.__repr__()
 
     def __repr__(self):
-        return f"{self.frequency:.3f} central frequency.\n{self.n_subbands} x " \
+        return f"<FreqSetup>\n{self.frequency:.3f} central frequency.\n{self.n_subbands} x " \
                f"{self.bandwidth_per_subband.to(u.MHz):.1f} " \
                f"subbands. {self.channels} channels per subband."
 
@@ -506,470 +588,25 @@ class FreqSetup(object):
         return d
 
 
-class Ms(object):
-    """Defines one MS object for a given observation.
-    It contains all relevant information that is MS-depended, e.g. associated MS file,
-    frequency setup, sources, etc. But also objects associated to the calibration tasks that
-    can run in the MS.
-    """
-    @property
-    def prefixname(self) -> str:
-        """Name of the project associated to the observation.
-        """
-        return self._prefixname
-
-    @property
-    def observatory(self) -> str:
-        """Name of the observatory that conducted the observation.
-        """
-        return self._observatory_name
-
-    @property
-    def cwd(self) -> Path:
-        """Returns the working directory for the project.
-        """
-        return self._cwd
-
-    @property
-    def msfile(self) -> Path:
-        """Returns the name of the MS file (libpath.Path object) associated to this correlator pass.
-        """
-        return self._msfile
-
-    @msfile.setter
-    def msfile(self, new_msfile: Union[Path, str]):
-        if isinstance(new_msfile, Path):
-            self._msfile = new_msfile
-        elif isinstance(new_msfile, str):
-            self._msfile = Path(new_msfile)
-        else:
-            TypeError(f"msfile() expected a str or Path type. Found {new_msfile} "
-                      f"({type(new_msfile)}).")
-
-    @property
-    def uvfitsfile(self) -> Path:
-        """Returns the UV FITS file associated to this observation, if any.
-        """
-        return self._uvfitsfile
-
-    @uvfitsfile.setter
-    def uvfitsfile(self, new_uvfitsfile: Union[Path, str]):
-        if isinstance(new_uvfitsfile, Path):
-            self._uvfitsfile = new_uvfitsfile
-        elif isinstance(new_uvfitsfile, str):
-            self._uvfitsfile = Path(new_uvfitsfile)
-        else:
-            TypeError(f"uvfitsfile() expected a str or Path type. Found {new_uvfitsfile} "
-                      f"({type(new_uvfitsfile)}).")
-
-    @property
-    def sources(self) -> Sources:
-        """List of sources present in this correlator pass.
-        """
-        return self._sources
-
-    @sources.setter
-    def sources(self, list_of_sources: Sources):
-        assert isinstance(list_of_sources, Sources)
-        self._sources = list_of_sources
-
-    @property
-    def antennas(self) -> Antennas:
-        """List of antennas available in the experiment.
-        """
-        return self._antennas
-
-    @antennas.setter
-    def antennas(self, new_antennas: Antennas):
-        isinstance(new_antennas, Antennas)
-        self._antennas = new_antennas
-
-    @property
-    def refant(self) -> list:
-        return self._refant
-
-    @refant.setter
-    def refant(self, new_refant: Union[str, list]):
-        """Defines the antenna to use as reference during calibration.
-        It can be either a str (with a single antenna, or comma-separated antennas),
-        or a list with the antenna(s) to use as reference.
-        """
-        if isinstance(new_refant, str):
-            new_refant = [ant.strip() for ant in new_refant.split(',')]
-        elif not isinstance(new_refant, list):
-            raise TypeError("The antenna introduced must be either a  str or list")
-
-        # As it may be set before the antenna information was retrieved from the MS
-        if len(self.antennas) > 0:
-            for antenna in new_refant:
-                assert antenna in self.antennas.names, \
-                       f"Antenna {antenna} for refant is not in the array."
-
-        self._refant = list(new_refant)
-
-    @property
-    def freqsetup(self) -> FreqSetup:
-        """Returns the frequency setup of the observation (FreqSetup object).
-        """
-        return self._freqsetup
-
-    @freqsetup.setter
-    def freqsetup(self, freqsetup: FreqSetup):
-        """Sets the frequency setup for the given correlator pass.
-        """
-        assert isinstance(freqsetup, FreqSetup)
-        self._freqsetup = freqsetup
-
-    @property
-    def epoch(self) -> dt.date:
-        """Epoch at which the project was observed (starting date).
-        """
-        return self._obsdate
-
-    @epoch.setter
-    def epoch(self, obsdate: dt.date):
-        assert isinstance(obsdate, dt.date), "obsdate needs to be of datetime.date type " \
-                                             f"(currently {obsdate} is {type(obsdate)})."
-        self._obsdate = obsdate
-
-    @property
-    def params(self) -> dict:
-        return self._params
-
-    @property
-    def timerange(self) -> tuple:
-        """Returns a tuple with the start and end time of the observation in datetime format.
-        """
-        return self._startime, self._endtime
-
-    @timerange.setter
-    def timerange(self, times: Tuple[dt.datetime]):
-        """Start and end time of the observation in datetime format.
-        Input:
-            - times : tuple of datetime
-                Tupple with (startime, endtime), each of them in datetime format.
-        """
-        starttime, endtime = times
-        assert isinstance(starttime, dt.datetime)
-        assert isinstance(endtime, dt.datetime)
-        self._startime = starttime
-        self._endtime = endtime
-        self.epoch = starttime.date()
-
-    @property
-    def splits(self):
-        return self._splits
-
-    @property
-    def logger(self) -> logging.Logger:
-        return self._logger
-
-    def __init__(self, prefixname: str, observatory: Optional[str] = None,
-                 cwd: Optional[Union[Path, str]] = None, params: dict = None,
-                 logger: Optional[logging.Logger] = None):
-        assert (prefixname != '') and (isinstance(prefixname, str)), \
-               "The prefix name needs to be a non-empty string."
-        self._prefixname = prefixname
-        self._observatory_name = observatory if observatory is not None else ''
-        if cwd is None:
-            self._cwd = Path('./')
-        elif isinstance(cwd, str):
-            self._cwd = Path(cwd)
-        elif isinstance(cwd, Path):
-            self._cwd = cwd
-        else:
-            TypeError(f"The working directory ({cwd}) should be either None, a Path type, or str.")
-
-        self._msfile = self.cwd / Path(f"{prefixname}.ms")
-        self._uvfitsfile = self.cwd / self.msfile.name.replace('.ms', '.uvfits')
-        self._freqsetup = None
-        self._sources = Sources()
-        self._antennas = Antennas()
-        self._splits = defaultdict(list)
-        self._params = params if params is not None else {}
-        if logger is None:
-            self._logger = logging.getLogger(f"Ms-{self.prefixname}")
-        else:
-            self._logger = logger
-
-        if 'reference_antenna' in params:
-            self.refant = params['reference_antenna']
-
-        if self.msfile.exists():
-            self.get_metadata_from_ms()
-            self.listobs()
-
-        self._logger.debug(f"MS object created with {self.__dict__}.")
-
-
-    def exists(self):
-        """Returns if the associated MS file exists.
-        """
-        return self.msfile.exists()
-
-    def get_metadata_from_ms(self):
-        """Recovers all useful metadata from the MS file and stores it in the object.
-
-        -- May Raise
-        It may raise KeyError if the type of sources (target, phaseref, fringefinder)
-        are not specified in the self.params dict.
-        """
-        m = msmd(str(self.msfile))
-        if not m.open(str(self.msfile)):
-            return ValueError(f"The MS file {self.msfile} could not be openned.")
-
-        try:
-            antenna_names = m.antennanames()
-
-            for ant_name in antenna_names:
-                ant = Antenna(name=ant_name, observed=True)
-                self.antennas.add(ant)
-
-            spw_names = range(m.nspw())
-            telescope_name = m.observatorynames()[0]
-            if self.observatory == '':
-                self._observatory_name = telescope_name
-            elif self.observatory != telescope_name:
-                rprint("[yellow]WARNING: the observatory name in MS does not match the one "
-                       "provided in the project[/yellow]")
-
-            src_names = m.fieldnames()
-            src_coords = [m.phasecenter(s) for s in range(len(src_names)) ]
-            for a_name, a_coord in zip(src_names, src_coords):
-                try:
-                    if a_name in self.params['target']:
-                        a_type = SourceType.target
-                    elif a_name in self.params['phaseref']:
-                        a_type = SourceType.calibrator
-                    elif a_name in self.params['fringefinder']:
-                        a_type = SourceType.fringefinder
-                    else:
-                        a_type = SourceType.other
-                except KeyError:
-                    rprint("[bold yellow]-- No source type information has been " \
-                           "found --[bold yellow]")
-                    rprint("You better define manually or through the inputs which sources " \
-                           "are target/calibrator/etc.")
-                    a_type = SourceType.other
-
-                self.sources.append(Source(a_name, a_type,
-                                           coord.SkyCoord(ra=a_coord['m0']['value'],
-                                                          dec=a_coord['m1']['value'],
-                                                          unit=(a_coord['m0']['unit'],
-                                                                a_coord['m1']['unit']),
-                                                          equinox=a_coord['refer'])))
-
-            timerange = m.timerangeforobs(0)
-            self.timerange = [tools.mjd2date(timerange['begin']['m0']['value']),
-                              tools.mjd2date(timerange['end']['m0']['value'])]
-
-            mean_freq = (m.meanfreq(spw_names[-1]) + m.meanfreq(0)) / 2.0
-            self.freqsetup = FreqSetup(m.nchan(0), m.nspw(), mean_freq,
-                                       m.bandwidths()[0])
-
-            nrows = int(m.nrows())
-
-            # To be able  to get the parallel hands, either circular or linear
-            corr_order = [Stokes(i) for i in m.corrtypesforpol(0)]
-            corr_pos = []
-            try:
-                corr_pos.append(corr_order.index(Stokes.RR))
-                corr_pos.append(corr_order.index(Stokes.LL))
-            except ValueError:
-                try:
-                    corr_pos.append(corr_order.index(Stokes.XX))
-                    corr_pos.append(corr_order.index(Stokes.YY))
-                except ValueError:
-                    rprint("[bold red]The associated MS does not have neither circular nor " \
-                           "linear-based polarization information[/bold red]")
-        finally:
-            m.close()
-
-        m = tb(str(self.msfile))
-        try:
-            if not m.open(str(self.msfile)):
-                return ValueError(f"The MS file {self.msfile} could not be openned.")
-
-            ant_subband = defaultdict(set)
-            # TODO: parallelize the following. This approach blocks indefinitely. Because of the MS.
-            # if test:
-            #     ant_subband_mutex = Lock()
-            #     rprint('\n[bold]Reading the MS to find which antennas actually observed.[/bold]')
-            #     with futures.ProcessPoolExecutor(max_workers=8) as executor:
-            #         workers = []
-            #         with progress.Progress() as progress_bar:
-            #             task = progress_bar.add_task("[yellow]Reading MS...", total=nrows)
-            #             for (start, nrow) in tools.chunkert(0, nrows, 5000):
-            #                 kwargs = {'mset': m, 'ant_subband_dict': ant_subband, 'startrow': start,
-            #                           'nrow': nrow, 'antenna_names': antenna_names,
-            #                           'spw_names': spw_names, 'corr_pos': corr_pos,
-            #                           'mutex': ant_subband_mutex}
-            #                 print(f"Launching {start}")
-            #                 workers.append(executor.submit(self._get_spw_per_ant, **kwargs))
-            #                 progress_bar.update(task, advance=nrow)
-            # else:
-            rprint('\n[bold]Reading the MS to find which antennas actually observed...[/bold]')
-            with progress.Progress() as progress_bar:
-                task = progress_bar.add_task("[yellow]Reading MS...", total=nrows)
-                for (start, nrow) in tools.chunkert(0, nrows, 5000):
-                    ants1 = m.getcol('ANTENNA1', startrow=start, nrow=nrow)
-                    ants2 = m.getcol('ANTENNA2', startrow=start, nrow=nrow)
-                    spws = m.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
-                    msdata = m.getcol('DATA', startrow=start, nrow=nrow)
-
-                    for ant_i,antenna_name in enumerate(antenna_names):
-                        for spw in spw_names:
-                            cond = np.where((ants1 == ant_i) & (ants2 == ant_i) & (spws == spw))
-                            if not (abs(msdata[corr_pos][:, :, cond[0]]) < 1e-5).all():
-                                ant_subband[antenna_name].add(spw)
-
-                    progress_bar.update(task, advance=nrow)
-        finally:
-            m.close()
-
-        for antenna_name in self.antennas.names:
-            self.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
-            self.antennas[antenna_name].observed = len(self.antennas[antenna_name].subbands) > 0
-
-        self.listobs()
-
-
-    def _get_spw_per_ant(self, mset, ant_subband_dict, startrow, nrow, antenna_names, spw_names,
-                         corr_pos, mutex):
-        ants1 = mset.getcol('ANTENNA1', startrow=startrow, nrow=nrow)
-        ants2 = mset.getcol('ANTENNA2', startrow=startrow, nrow=nrow)
-        spws = mset.getcol('DATA_DESC_ID', startrow=startrow, nrow=nrow)
-        msdata = mset.getcol('DATA', startrow=startrow, nrow=nrow)
-        print(r"Got data from starrow: {startrow}")
-
-        for ant_i,antenna_name in enumerate(antenna_names):
-            for spw in spw_names:
-                cond = np.where((ants1 == ant_i) & (ants2 == ant_i) & (spws == spw))
-                if not (abs(msdata[corr_pos][:, :, cond[0]]) < 1e-5).all():
-                    print(f"Acquiring mutex for {startrow}")
-                    mutex.acquire()
-                    print(f"Acquired mutex for {startrow}")
-                    ant_subband_dict[antenna_name].add(spw)
-                    mutex.release()
-                    print(f"Released mutex for {startrow}")
-
-
-    def antennas_in_scan(self, scanno: int) -> list:
-        """Returns a list with all antennas that observed the given scan.
-        """
-        m = msmd(str(self.msfile))
-        try:
-            if not m.open(str(self.msfile)):
-                return ValueError(f"The MS file {self.msfile} could not be openned.")
-
-            antenna_names = m.antennanames()
-            ant_ids = m.antennasforscan(scanno)
-        finally:
-            m.close()
-
-        return [antenna_names[a] for a in ant_ids]
-
-
-    def scans_with_source(self, source_name: str) -> list:
-        """Returns a list with the numbers of the scans where the given source was observed.
-        """
-        m = msmd(str(self.msfile))
-        if not m.open(str(self.msfile)):
-            return ValueError(f"The MS file {self.msfile} could not be openned.")
-
-        scans = msmd.scansforfield(source_name)
-        m.close()
-        return scans
-
-
-    def listobs(self, listfile: Union[Path, str] = None, overwrite=True) -> dict:
-        listfile = self.cwd / f"{self.prefixname}-listobs.log" if listfile is None else listfile
-        return casatasks.listobs(self.msfile.name, listfile=str(listfile), overwrite=overwrite)
-
-
-    def split(self, sources: Optional[Union[Iterable[str], str, None]] = None,
-              keepflags=False, chanbin: int =-1, **kwargs):
-        """Splits all the data from all calibrated sources.
-        If sources is None, then all sources will be split.
-
-        Params:
-            - chanbin : int  (default = -1)
-              Width (bin) of input channels to average to for an output channel.
-              If -1, then if will create a single-output channel per spw.
-
-        It returns a dict with all split source names as keys. The values are the new Ms objects.
-        """
-        splits = {}
-
-        if isinstance(sources, str):
-            sources = [source.strip() for source in sources.split(',')]
-
-        if sources is not None:
-            for source in sources:
-                assert source in self.sources, \
-                       f"The passed source {source} is not in the MS {self.msfile}."
-        else:
-            sources = self.sources.names
-
-        if chanbin == -1 or chanbin > 1:
-            kwargs['chanaverage'] = True
-            kwargs['chanbin'] = self.freqsetup.channels
-
-        suffix = 1
-        while any([os.path.isdir(f"{self.prefixname}.{a_source}" \
-                   f"{'' if suffix == 1 else '.'+str(suffix)}.ms") for a_source in sources]):
-            suffix += 1
-
-        for a_source in sources:
-            np.int = int
-            np.float = float  # these two is because CASA uses deprecated types in newer numpy ver!
-            try:
-                ms_name = f"{self.prefixname}.{a_source}" \
-                          f"{'' if suffix == 1 else '.'+str(suffix)}.ms"
-                casatasks.mstransform(vis=str(self.msfile), outputvis=ms_name,
-                                      field=a_source, keepflags=keepflags, **kwargs)
-                splits[a_source] = Ms(ms_name.replace('.ms', ''), cwd=self.cwd,
-                                      params=self._params, logger=self._logger)
-                self.splits[a_source].append(splits[a_source])
-            except:
-                rprint(f"[bold red]Could not create a split MS file for {a_source}.[/bold red]")
-
-        return splits
-
-
-    def export_uvfits(self, outfitsfilename: Union[str, None] = None, overwrite=True,
-                      datacolumn='corrected'):
-        """Export the available MS file into a UVFITS file, per source.
-        """
-        if outfitsfilename is None:
-            outfitsfilename = str(self.msfile).replace(".ms", ".uvfits")
-
-        casatasks.exportuvfits(vis=str(self.msfile), fitsfile=outfitsfilename,
-                               datacolumn=datacolumn, multisource=(len(self.sources) > 1),
-                               combinespw=True, padwithflags=True, overwrite=overwrite)
-
-
-
-
 class Importing(object):
     """Class that contains different static functions to import data from different observatories
     into a MS. Each function would conduct the necessary steps to get a properly prepared MS file.
     """
 
-    def __init__(self, ms: Ms):
+    def __init__(self, ms: capi.Project):
         self._ms = ms
 
     def lba_fits(self, fitsfile: str):
         # TODO: LBA import in CASA?
         raise NotImplementedError
 
-    def evn_download(self, obsdate: str, projectcode: str = None, username: str = None,
+    def evn_download(self, obsdate: str = None, projectcode: str = None, username: str = None,
                      password: str = None):
         """Downloads the data files associated with the given EVN project.
         It will download the associated FITS-IDI files, and the associated .antab and .uvflg files.
 
         Inputs
-            obsdate : str
+            obsdate : str  (default = None, assumes the info is written in the Project)
                 String with the observing date, in the format YYMMDD.
             projectcode : str  (default = None)
                 Project code of the experiment to download. If None, assumes the same as the
@@ -985,6 +622,12 @@ class Importing(object):
         """
         params = []
         expname = projectcode if projectcode is not None else self._ms.prefixname
+        if obsdate is None:
+            try:
+                obsdate = self._ms.time.ymd if self._ms.time.ymd is not None else self._ms.params['epoch']
+            except KeyError:
+                rprint("[red bold]In order to download the EVN data, the 'epoch' (YYMMDD format) " \
+                       "needs to be provided in the initial parameters.[/red bold]")
 
         if None not in (username, password):
             params += ["--http-user", username, "--http-passwd", password]
@@ -992,22 +635,22 @@ class Importing(object):
         params += ["-t45", "-l1", "-r", "-nd", "archive.jive.nl/exp/" \
                    f"{expname.upper()}_{obsdate}/fits -A '{expname.lower()}*'"]
 
-        tools.shell_command("wget", params)
-        tools.shell_command("md5sum", ["-c", f"{expname.lower()}.checksum"])
+        capi.tools.shell_command("wget", params)
+        capi.tools.shell_command("md5sum", ["-c", f"{expname.lower()}.checksum"])
         # TODO: verify here that all files are OK!
-        tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
+        capi.tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
                                      f"pipe/{expname.lower()}.antab.gz"])
-        tools.shell_command("gunzip", [f"{expname.lower()}.antab.gz"])
+        capi.tools.shell_command("gunzip", [f"{expname.lower()}.antab.gz"])
         # TODO: if ERROR 404: Not Found, then go for the _1, _2,...
-        tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
+        capi.tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
                                      f"pipe/{expname.lower()}.uvflg"])
-        # TODO: this only if I need AIPS for ionosphere
-        tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
+        # TODO: this only if I need AIPS
+        capi.tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
                                      f"pipe/{expname.lower()}.tasav.FITS.gz"])
-        tools.shell_command("gunzip", [f"{expname.lower()}.tasav.FITS.gz"])
+        capi.tools.shell_command("gunzip", [f"{expname.lower()}.tasav.FITS.gz"])
 
     def evn_aips_import(self, fitsidifiles: Union[list, str, None] = None, tasav_file: Union[str, None] = None):
-        """Because CASA
+        """Because CASA is shit
         """
         pass
 
@@ -1041,8 +684,8 @@ class Importing(object):
             if delete:
                 shutil.rmtree(self._ms.msfile)
             else:
-                rprint(f"[bold red]The MS file {self._ms.msfile} already exists "
-                       "and you told me to not remove it[/bold red]")
+                rprint(f"[bold yellow]The MS file {self._ms.msfile} already exists "
+                       "and you told me to not remove it[/bold yellow]")
                 raise FileExistsError
 
         # First run the Tsys and GC appending to the FITS-IDI. These functions will do nothing
