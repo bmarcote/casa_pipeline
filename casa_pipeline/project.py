@@ -3,9 +3,8 @@ import os
 import pickle
 import logging
 from collections import defaultdict
-import datetime as dt
 from pathlib import Path
-from typing import Optional, Union, Tuple, Iterable, NoReturn, List, Tuple
+from typing import Optional, Union, Tuple, Iterable #, NoReturn, List, Tuple
 # import blessed
 import yaml
 import numpy as np
@@ -136,8 +135,6 @@ class Project(object):
 
     # @property
     # def last_step(self):
-    #     """Returns the last post-processing step that did run properly in a tentative previous run.
-    #     """
     #     return self._last_step
     #
     # @last_step.setter
@@ -153,23 +150,26 @@ class Project(object):
         return self._splits
 
     @property
-    def calibrate(self):
+    def calibrate(self) -> capi.evn_calibration.Calibration:
+        #TODO: there will be more possibilities
+        # likely to do a parent class called Calibration?
         return self._calibration
 
     @property
-    def flag(self):
+    def flag(self) -> capi.flagging.Flagging:
         return self._flagging
 
     @property
-    def plot(self):
+    def plot(self) -> capi.plotting.Plotting:
         return self._plotting
 
     @property
-    def image(self):
+    def image(self) -> capi.imaging.Imaging:
         return self._imaging
 
     @property
-    def importdata(self):
+    def importdata(self) -> capi.obsdata.Importing:
+        #TODO: importing should also be a sub-class (network dependend)
         return self._importing
 
     def __new__(cls, *args, **kwargs):
@@ -286,7 +286,8 @@ class Project(object):
         elif (self.observatory.lower() == 'gmrt'):
             raise NotImplementedError("Data reduction for GMRT has not been implemented yet.")
         else:
-            raise NotImplementedError(f"Data reduction for {self.observatory} has not been implemented yet.")
+            raise NotImplementedError(f"Data reduction for {self.observatory} " \
+                                      "has not been implemented yet.")
 
         self._importing = capi.obsdata.Importing(self)
         self._flagging = capi.flagging.Flagging(self)
@@ -391,7 +392,8 @@ class Project(object):
             #         with progress.Progress() as progress_bar:
             #             task = progress_bar.add_task("[yellow]Reading MS...", total=nrows)
             #             for (start, nrow) in tools.chunkert(0, nrows, 5000):
-            #                 kwargs = {'mset': m, 'ant_subband_dict': ant_subband, 'startrow': start,
+            #                 kwargs = {'mset': m, 'ant_subband_dict': ant_subband,
+            #                           'startrow': start,
             #                           'nrow': nrow, 'antenna_names': antenna_names,
             #                           'spw_names': spw_names, 'corr_pos': corr_pos,
             #                           'mutex': ant_subband_mutex}
@@ -423,6 +425,8 @@ class Project(object):
             self.antennas[antenna_name].observed = len(self.antennas[antenna_name].subbands) > 0
 
         self.listobs()
+        self.summary()
+
 
     def _get_spw_per_ant(self, mset, ant_subband_dict, startrow, nrow, antenna_names, spw_names,
                          corr_pos, mutex):
@@ -497,8 +501,10 @@ class Project(object):
                 # I don't think it should be so strict.
                 # assert source in self.sources, \
                        # f"The passed source {source} is not in the MS {self.msfile}."
-                rprint(f"[yellow]Note that the source {source} is not present in the MS {self.msfile}.[/yellow]")
-                self.logger.warning("Note that the source {source} is not present in the MS {self.msfile}.")
+                rprint(f"[yellow]Note that the source {source} is not present " \
+                       f"in the MS {self.msfile}.[/yellow]")
+                self.logger.warning(f"Note that the source {source} is not present " \
+                                    f"in the MS {self.msfile}.")
         else:
             sources = self.sources.names
 
@@ -522,7 +528,7 @@ class Project(object):
                 splits[a_source] = Project(ms_name.replace('.ms', ''), cwd=self.cwd,
                                       params=self.params, logger=self._logger)
                 self.splits[a_source].append(splits[a_source])
-            except:
+            except: #TODO: which error is when it does not find a source?
                 rprint(f"[bold red]Could not create a split MS file for {a_source}.[/bold red]")
 
         return splits
@@ -537,7 +543,8 @@ class Project(object):
 
         casatasks.exportuvfits(vis=str(self.msfile), fitsfile=outfitsfilename,
                                datacolumn=datacolumn, multisource=(len(self.sources) > 1),
-                               combinespw=combinespw, padwithflags=padwithflags, overwrite=overwrite)
+                               combinespw=combinespw, padwithflags=padwithflags,
+                               overwrite=overwrite)
 
 
     def exists_local_copy(self):
@@ -597,16 +604,11 @@ class Project(object):
         if self.observatory != '':
     #             s += term.bright_black('Observatory: ') + f"{self.observatory}\n"
             s_file += [f"Observatory: {self.observatory}"]
-    #
-    #         # TODO: if it is EVN, put a direct link to the archive (same function as in evn_postprocess)
-    #         s += term.bright_black('') + f"\n"
-    #         s_file += [f""]
-    #         s += term.bright_black('') + f"\n"
-    #         s_file + [f""]
     #         s += term.bold_green('SOURCES\n')
         s_file += [f"Central frequency: {self.freqsetup.frequency:.2}"]
         s_file += [f"With a bandwidth of {self.freqsetup.bandwidth.to(u.MHz)} divided in " \
-                   f"{self.freqsetup.n_subbands} x {self.freqsetup.bandwidth_per_subband.to(u.MHz)}" \
+                   f"{self.freqsetup.n_subbands} x " \
+                   f"{self.freqsetup.bandwidth_per_subband.to(u.MHz)}" \
                    f" subbands."]
         s_file += [f"{self.freqsetup.channels} spectral channels per subband.\n"]
 

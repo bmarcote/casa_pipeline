@@ -5,6 +5,6 @@ from .casa_pipeline import obsdata
 from .casa_pipeline import tools
 from .casa_pipeline import flagging
 from .casa_pipeline import plotting
-# from .casa_pipeline import imaging
+from .casa_pipeline import imaging
 from .casa_pipeline.evn_casa import calibration as evn_calibration
 # TOOD: same for GMRT
