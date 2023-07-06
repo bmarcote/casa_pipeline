@@ -6,24 +6,19 @@ from __future__ import annotations
 import os
 import glob
 import shutil
-import logging
 import datetime as dt
 import numpy as np
 from enum import IntEnum
 from pathlib import Path
 # from concurrent import futures
 # from threading import Lock
-from typing import Optional, Iterable, NoReturn, List, Union, Tuple
+from typing import Optional, Iterable, NoReturn, List, Union
 from dataclasses import dataclass
-from collections import defaultdict
 from natsort import natsort_keygen
 import casatasks
-from casatools import msmetadata as msmd
-from casatools import table as tb
 from enum import Enum
 from astropy import units as u
 from rich import print as rprint
-from rich import progress
 # import blessed
 from astropy import coordinates as coord
 from casa_pipeline.casavlbitools import fitsidi
