@@ -616,7 +616,7 @@ class Importing(object):
                 already expired.
         """
         params = []
-        expname = projectcode if projectcode is not None else self._ms.prefixname
+        expname = projectcode if projectcode is not None else self._ms.projectname
         if obsdate is None:
             try:
                 obsdate = self._ms.time.ymd if self._ms.time.ymd is not None else self._ms.params['epoch']
@@ -686,7 +686,7 @@ class Importing(object):
         # First run the Tsys and GC appending to the FITS-IDI. These functions will do nothing
         # if the information is already there.
         if fitsidifiles is None:
-            fitsidifiles = sorted(glob.glob(f"{self._ms.prefixname.lower()}_1_1.IDI*"),
+            fitsidifiles = sorted(glob.glob(f"{self._ms.projectname.lower()}_1_1.IDI*"),
                                   key=natsort_keygen())
         elif isinstance(fitsidifiles, str):
             fitsidifiles = sorted(glob.glob(fitsidifiles), key=natsort_keygen())
@@ -704,9 +704,9 @@ class Importing(object):
             if not os.path.isfile(a_fitsidi):
                 raise FileNotFoundError(f"The file {a_fitsidi} could not be found.")
 
-        antabfile = self._ms.cwd / Path(f"{self._ms.prefixname.lower()}.antab")
-        uvflgfile = self._ms.cwd / Path(f"{self._ms.prefixname.lower()}.uvflg")
-        flagfile = self._ms.cwd / Path(f"{self._ms.prefixname.lower()}.flag")
+        antabfile = self._ms.cwd / Path(f"{self._ms.projectname.lower()}.antab")
+        uvflgfile = self._ms.cwd / Path(f"{self._ms.projectname.lower()}.uvflg")
+        flagfile = self._ms.cwd / Path(f"{self._ms.projectname.lower()}.flag")
         if not ignore_antab:
             if antabfile.exists():
                 rprint("[bold]Appending the Tsys values to the FITS-IDI files[/bold]")
@@ -727,7 +727,7 @@ class Importing(object):
             assert uvflgfile.exists(), \
                    f"The associated file {uvflgfile} should exist but was not found."
             rprint("[bold]Converting the AIPS-style flags into CASA-style flags[/bold]")
-            rprint(f"[green]The file {self._ms.prefixname.lower()}.flag containing the "
+            rprint(f"[green]The file {self._ms.projectname.lower()}.flag containing the "
                    "a-priori flagging has been created.[/green]")
             fitsidi.convert_flags(infile=str(uvflgfile), idifiles=fitsidifiles,
                                   outfile=str(flagfile))

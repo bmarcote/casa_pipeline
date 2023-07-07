@@ -1,6 +1,3 @@
-"""Contains all functions concerning calibration of a VLBI project
-ii MS format within (or out) CASA.
-"""
 import os
 import shutil
 from pathlib import Path
@@ -803,7 +800,6 @@ class Calibration(object):
     #         casatools.ft(vis=str(project.msfile), field=a_cal, model=str(src_model), usescratch=True)
     #         # Here open the MS, getcol MODEL_XX  divide all complex numbers by 1000 and load it again.
     #         casatasks.gaincal(vis=str(project.msfile), caltable=str(calsc), field=a_cal, solint='3min',
-    #                           refant=','.join(project.refants), gaintype='G', calmode='ap', interp=['nearest'],
     #                           parang=True)
     #         casatasks.applycal()
     #

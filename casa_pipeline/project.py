@@ -4,7 +4,7 @@ import pickle
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional, Union, Tuple, Iterable #, NoReturn, List, Tuple
+from typing import Optional, Union, Iterable #, Tuple, NoReturn, List, Tuple
 # import blessed
 import yaml
 import numpy as np
@@ -150,25 +150,30 @@ class Project(object):
         return self._splits
 
     @property
-    def calibrate(self) -> capi.evn_calibration.Calibration:
+    def calibrate(self):
+    # def calibrate(self) -> capi.evn_calibration.Calibration:
         #TODO: there will be more possibilities
         # likely to do a parent class called Calibration?
         return self._calibration
 
     @property
-    def flag(self) -> capi.flagging.Flagging:
+    def flag(self):
+    # def flag(self) -> capi.flagging.Flagging:
         return self._flagging
 
     @property
-    def plot(self) -> capi.plotting.Plotting:
+    def plot(self):
+    # def plot(self) -> capi.plotting.Plotting:
         return self._plotting
 
     @property
-    def image(self) -> capi.imaging.Imaging:
+    def image(self):
+    # def image(self) -> capi.imaging.Imaging:
         return self._imaging
 
     @property
-    def importdata(self) -> capi.obsdata.Importing:
+    def importdata(self):
+    # def importdata(self) -> capi.obsdata.Importing:
         #TODO: importing should also be a sub-class (network dependend)
         return self._importing
 
@@ -242,7 +247,7 @@ class Project(object):
                 with open(params, mode="rt", encoding="utf-8") as fp:
                     self._args = yaml.safe_load(fp)
         else:
-            self._args = params
+            self._args = {}
 
         if 'epoch' in self.params:
             self._time = capi.ObsEpoch(int(self.params['epoch']))
@@ -311,6 +316,7 @@ class Project(object):
             return ValueError(f"The MS file {self.msfile} could not be openned.")
 
         try:
+            self._antennas = capi.Antennas()
             antenna_names = m.antennanames()
 
             for ant_name in antenna_names:
@@ -329,11 +335,11 @@ class Project(object):
             src_coords = [m.phasecenter(s) for s in range(len(src_names)) ]
             for a_name, a_coord in zip(src_names, src_coords):
                 try:
-                    if a_name in self.params['target']:
+                    if a_name in self.params['sources']['target']:
                         a_type = capi.SourceType.target
-                    elif a_name in self.params['phaseref']:
+                    elif a_name in self.params['sources']['phaseref']:
                         a_type = capi.SourceType.calibrator
-                    elif a_name in self.params['fringefinder']:
+                    elif a_name in self.params['sources']['fringefinder']:
                         a_type = capi.SourceType.fringefinder
                     else:
                         a_type = capi.SourceType.other
