@@ -3,7 +3,7 @@
 # https://realpython.com/python-toml/
 ---
 project_name: a_name
-network: evn
+observatory: evn
 # epoch: DDMMYY
 reference_antenna: "EF"
 

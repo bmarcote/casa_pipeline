@@ -352,8 +352,8 @@ class Calibration(object):
         """Generates the calibration tables for gain and system temperature.
         Existing versions of the calibration will be removed first if replace is True.
         """
-        caltsys = self.caldir / f"{str(self._ms.prefixname).lower()}.tsys"
-        calgc = self.caldir / f"{str(self._ms.prefixname).lower()}.gc"
+        caltsys = self.caldir / f"{str(self._ms.projectname).lower()}.tsys"
+        calgc = self.caldir / f"{str(self._ms.projectname).lower()}.gc"
 
         self._ms.logger.info(f"Running calibration.a_priori_calibration (replace={replace})")
         if replace:
@@ -390,8 +390,8 @@ class Calibration(object):
 
         It is written here for compatibility and internal tests.
         """
-        accor_caltable = self.caldir / f"{str(self._ms.prefixname).lower()}.accor"
-        accor_caltable_smooth = self.caldir / f"{str(self._ms.prefixname).lower()}.accor_smooth"
+        accor_caltable = self.caldir / f"{str(self._ms.projectname).lower()}.accor"
+        accor_caltable_smooth = self.caldir / f"{str(self._ms.projectname).lower()}.accor_smooth"
 
         if replace:
             remove_if_exists(accor_caltable)
@@ -419,8 +419,8 @@ class Calibration(object):
         """Runs the ionospheric calibration if required (i.e. if the observation was conducted
         at less than 6 GHz). This can also be turned off in the input parameter files.
         """
-        caltec = self.caldir / f"{str(self._ms.prefixname).lower()}.tec"
-        imtec  = self.caldir / f"{str(self._ms.prefixname).lower()}"
+        caltec = self.caldir / f"{str(self._ms.projectname).lower()}.tec"
+        imtec  = self.caldir / f"{str(self._ms.projectname).lower()}"
         if replace:
             remove_if_exists(caltec)
             self.callib.remove_entry('teccor', files=True)
@@ -511,9 +511,9 @@ class Calibration(object):
         """
         #TODO: add the possibility of using a source model for fringe.
         # from the Source.model param if not None
-        cals = {'sbd': self.caldir / f"{str(self._ms.prefixname).lower()}.sbd",
-                'mbd': self.caldir / f"{str(self._ms.prefixname).lower()}.mbd",
-                'bp': self.caldir / f"{str(self._ms.prefixname).lower()}.bp"}
+        cals = {'sbd': self.caldir / f"{str(self._ms.projectname).lower()}.sbd",
+                'mbd': self.caldir / f"{str(self._ms.projectname).lower()}.mbd",
+                'bp': self.caldir / f"{str(self._ms.projectname).lower()}.bp"}
 
         if replace:
             for cal in cals:
@@ -602,8 +602,8 @@ class Calibration(object):
         - global fringe fit: on all calibrators (and target if no phase-referencing is used).
         """
         #TODO: add the possibility of using a source model for fringe.
-        cals = {'sbd2': self.caldir/f"{str(self._ms.prefixname).lower()}.sbd2",
-                'mbd2': self.caldir/f"{str(self._ms.prefixname).lower()}.mbd2"}
+        cals = {'sbd2': self.caldir/f"{str(self._ms.projectname).lower()}.sbd2",
+                'mbd2': self.caldir/f"{str(self._ms.projectname).lower()}.mbd2"}
 
         if replace:
             for cal in cals:
@@ -646,38 +646,81 @@ class Calibration(object):
 
         self._verify([cals['mbd2']])
 
-    def bandpass(self, bpver=None, replace=False, fillgaps=16, combine='scan',
-                 corrdepflags=True, minsnr=3, minblperant=2, solnorm=True, solint='inf',
-                 bandtype='B', parang=True, **kwargs):
-        if bpver is not None:
-            calbp = self.caldir / f"{str(self._ms.prefixname).lower()}.bp{bpver}"
-            assert (not calbp.exists()) or replace, \
-                   f"The calibration table {bpver} exists and shall not be replaced."
-        else:
-            bpver = 1
-            calbp = self.caldir / f"{str(self._ms.prefixname).lower()}.bp"
-            if not replace:
-                while calbp.exists():
-                    bpver += 1
-                    calbp = self.caldir / f"{str(self._ms.prefixname).lower()}.bp{bpver}"
+    #TODO: implement a fringefit instance here standalone
+    def fringefit(self, caltable: Union[str, Path], field='', spw='', intent='', selectdata=True,
+                  timerange='', uvrange='', antenna='', scan='', observation='', msselect='',
+                  solint='inf', combine='', refant=None, minsnr=3.0, zerorates=False,
+                  globalsolve=True, niter=100, delaywindow=[-200, 200], ratewindow=[-5e-8, 5e-8],
+                  append=False, corrdepflags=True, corrcomb='none', docallib=False,
+                  callib='', gaintable='', gainfield='', interp='', spwmap='', paramactive='',
+                  concatspws=True, parang=False):
+        """Fringe fit CASA task.
+        """
+        if refant is None:
+            #TODO: select the prioritized antennas
+            pass
 
-        if 'field' not in kwargs:
-            kwargs['field'] =  ','.join(self._ms.sources.fringe_finders.names)
+        casatasks.fringefit(vis=str(self._ms.msfile), caltable=caltable, field=field,
+                            spw=spw, intent=intent, selectdata=selectdata, timerange=timerange,
+                            uvrange=uvrange, antenna=antenna, scan=scan, observation=observation,
+                            msselect=msselect, solint=solint, combine=combine, refant=refant,
+                            minsnr=minsnr, zerorates=zerorates, globalsolve=globalsolve,
+                            niter=niter, delaywindow=delaywindow, ratewindow=ratewindow,
+                            append=append, corrdepflags=corrdepflags, corrcomb=corrcomb,
+                            docallib=docallib, callib=callib, gaintable=gaintable,
+                            gainfield=gainfield, interp=interp, spwmap=spwmap,
+                            paramactive=paramactive, concatspws=concatspws, parang=parang)
+        # TODO: add the caltable to the callib
+        return caltable
 
-        if 'refant' not in kwargs:
-            kwargs['refant'] = ','.join(self._ms.refant)
 
-        rprint("[bold]Running bandpass calibration.[/bold]")
-        casatasks.bandpass(vis=str(self._ms.msfile), fillgaps=fillgaps,
-                           combine=combine, caltable=str(calbp), docallib=True,
-                           corrdepflags=corrdepflags, minsnr=minsnr, minblperant=minblperant,
-                           callib=str(self.callib.filename), solnorm=solnorm, solint=solint,
-                           bandtype=bandtype, parang=parang, **kwargs)
-        self.callib.new_entry(name=f"bandpass{str(bpver) if bpver > 1 else ''}",
-                              caltable=str(calbp),
-                              parameters={"tinterp": 'linear', "finterp": 'linear'})
+    def bandpass(self, caltable: Union[str, Path] = None, field: Union[str, None] = None,
+                 spw='', intent='', selectdata=True, timerange='', uvrange='', antenna='',
+                 scan='', observation='', msselect='', solint='inf', combine='scan',
+                 refant: Union[str, None] = None, minblperant=2, minsnr=3.0, solnorm=False,
+                 bandtype='B', smodel='', corrdepflags=True, append=False, fillgaps=16, degamp=3,
+                 degphase=3, visnorm=False, maskcenter=0, maskedge=5, docallib=False, callib='',
+                 gaintable='', gainfield='', interp='', spwmap='', parang=False, replace=True):
+        """
+        Modifed parameters:
+        - caltable : str/Path = None
+        - field : str/None = None
+            If None, it will pick up the list of fringe finders from the current Project.
+        - refant : str/None = None
+            If None, it will pick the defined referece antennas from the project.
+        """
+        if caltable is None:
+            caltable = self.caldir / f"{str(self._ms.projectname).lower()}.bp"
 
-        self._verify([calbp])
+        if (not replace) and caltable.exists():
+            raise FileExistsError(f"The calibration table {caltable} exists and 'replace' is" \
+                                  "set to False. Cannot be overwritten.")
+        elif replace and caltable.exists():
+            shutil.rmtree(caltable)
+
+        if field is None:
+            field =  ','.join(self._ms.sources.fringe_finders.names)
+
+        if refant is None:
+            refant = ','.join(self._ms.refant)
+
+        rprint("\n[bold]Running bandpass calibration.[/bold]")
+        casatasks.bandpass(vis=str(self._ms.msfile), caltable=caltable, field=field,
+                           spw=spw, intent=intent, selectdata=selectdata, timerange=timerange,
+                           uvrange=uvrange, antenna=antenna, scan=scan, observation=observation,
+                           msselect=msselect, solint=solint, combine=combine, refant=refant,
+                           minblperant=minblperant, minsnr=minsnr, solnorm=solnorm,
+                           bandtype=bandtype, smodel=smodel, corrdepflags=corrdepflags,
+                           append=append, fillgaps=fillgaps, degamp=degamp, degphase=degphase,
+                           visnorm=visnorm, maskcenter=maskcenter, maskedge=maskedge,
+                           docallib=docallib, callib=callib, gaintable=gaintable, gainfield=gainfield,
+                           interp=interp, spwmap=spwmap, parang=parang)
+        # TODO: add to the callib
+        # self.callib.new_entry(name=f"bandpass{str(bpver) if bpver > 1 else ''}",
+        #                       caltable=str(calbp),
+        #                       parameters={"tinterp": 'linear', "finterp": 'linear'})
+        #
+        # self._verify([calbp])
 
     def scalar_bandpass(self):
         """Pure scalar bandpass (amplitude only) calibration table based on the autocorrelations.

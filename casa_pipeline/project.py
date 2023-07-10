@@ -217,12 +217,6 @@ class Project(object):
         self._logger = logging.getLogger(self.projectname)
         self.logger.debug(f"Initializing project '{self.projectname}'.")
 
-        if observatory.upper().strip() not in _OBSERVATORIES:
-            ValueError(f"The observatory {observatory} is not known. " \
-                       f"Only {', '.join(_OBSERVATORIES)} are available.")
-
-        self._observatory = observatory.upper().strip()
-        self.logger.debug(f"Data from observatory {observatory}.")
 
         if sci_package.upper().strip() not in _SCI_PACKAGE:
             ValueError(f"The sci_package {sci_package} is not known. " \
@@ -246,6 +240,8 @@ class Project(object):
             elif isinstance(params, Path) or isinstance(params, str):
                 with open(params, mode="rt", encoding="utf-8") as fp:
                     self._args = yaml.safe_load(fp)
+
+                self.logger.debug(f"Parameters successfully read from the file {params}.")
         else:
             self._args = {}
 
@@ -278,15 +274,22 @@ class Project(object):
         # if self.exists_local_copy():
         #     self.load(self._local_copy)
 
-        if observatory != '':
-            self._observatory = observatory
-            self.logger.debug(f"Observatory changed to {self.observatory}.")
+        assert 'reference_antenna' in self._args
+        self.refant = self._args['reference_antenna']
 
-        assert 'reference_antenna' in params
-        self.refant = params['reference_antenna']
+
+        if 'observatory' not in self._args:
+            self._args['observatory'] = observatory
+
+        if observatory.upper().strip() not in _OBSERVATORIES:
+            ValueError(f"The observatory {observatory} is not known. " \
+                       f"Only {', '.join(_OBSERVATORIES)} are available.")
+
+        self._observatory = observatory.upper().strip()
+        self.logger.debug(f"Data from observatory {observatory}.")
 
         # TODO: differentiate as function of the observatory
-        if (self.observatory.lower() == 'evn')  or self.observatory == '':
+        if self.observatory.lower() == 'evn':
             self._calibration = capi.evn_calibration.Calibration(self, self.caldir)
         elif (self.observatory.lower() == 'gmrt'):
             raise NotImplementedError("Data reduction for GMRT has not been implemented yet.")
@@ -331,6 +334,7 @@ class Project(object):
                 rprint("[yellow]WARNING: the observatory name in MS does not match the one "
                        "provided in the project[/yellow]")
 
+            self._sources = capi.Sources()
             src_names = m.fieldnames()
             src_coords = [m.phasecenter(s) for s in range(len(src_names)) ]
             for a_name, a_coord in zip(src_names, src_coords):
@@ -358,8 +362,9 @@ class Project(object):
                                                                equinox=a_coord['refer'])))
 
             timerange = m.timerangeforobs(0)
-            self._time = capi.ObsEpoch(start_datetime=capi.tools.mjd2date(timerange['begin']['m0']['value']),
-                                       end_datetime=capi.tools.mjd2date(timerange['end']['m0']['value']))
+            self._time = capi.ObsEpoch(
+                    start_datetime=capi.tools.mjd2date(timerange['begin']['m0']['value']),
+                    end_datetime=capi.tools.mjd2date(timerange['end']['m0']['value']))
 
             mean_freq = (m.meanfreq(spw_names[-1]) + m.meanfreq(0)) / 2.0
             self._freqsetup = capi.FreqSetup(m.nchan(0), m.nspw(), mean_freq,

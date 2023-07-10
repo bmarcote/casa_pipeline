@@ -19,7 +19,7 @@ class Flagging(object):
         if isinstance(flagfile, str):
             flagfile = Path(flagfile)
 
-        flagfile = (self._ms.cwd / f"{self._ms.prefixname.lower()}.flag") if flagfile is None \
+        flagfile = (self._ms.cwd / f"{self._ms.projectname.lower()}.flag") if flagfile is None \
                    else flagfile
         assert flagfile.exists(), f"The flagfile {flagfile} cannot be found."
         results = casatasks.flagdata(vis=str(self._ms.msfile), mode='list', inpfile=str(flagfile),

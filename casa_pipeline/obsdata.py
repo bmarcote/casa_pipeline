@@ -306,6 +306,8 @@ class Sources(object):
         """
         return [s.coordinates for s in self._sources]
 
+    # TODO: create a setter for these ones, where one can specify a string or list.
+    # it will check that the source exists, and then specify it as such
     @property
     def targets(self) -> Sources:
         """Returns the target sources.
