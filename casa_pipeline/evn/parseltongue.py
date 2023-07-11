@@ -1,6 +1,8 @@
 import glob
 import argparse
+import subprocess
 from pathlib import Path
+import datetime as dt
 from typing import Optional, Union
 
 from AIPS import AIPS
@@ -31,8 +33,9 @@ def max_table_no(uvdata, inext: str):
     return max_no
 
 
-def fitld(projectname: str, fitsidifiles: Optional[str] = None,
-          uvfits: Optional[str] = None, aipsclass="UVDATA", digicor=-1):
+def fitld(projectname: str, datain: str, ncount: int = 1, doconcat: int = 1,
+          aipsclass: str = "UVDATA", digicor=-1, douvcomp: int = 1,
+          clint: float = 0.25, replace=False):
     """Imports the associated FITS-IDI or UVFITS from a given project into AIPS.
     Note that one and only one of the 'fitsidifiles' or 'uvfits; parameters needs to be provided.
 
@@ -50,32 +53,24 @@ def fitld(projectname: str, fitsidifiles: Optional[str] = None,
     """
     uvdata = AIPSUVData(projectname, aipsclass, 1, 1)
     if uvdata.exists():
-        uvdata.zap(force=True)
+        if replace:
+            uvdata.zap(force=True)
+        else:
+            return uvdata
 
-    assert (fitsidifiles, uvfits).count(None) == 1, "One and only one of the 'fitsidifiles' or" \
-            " 'uvfits' parameters need to be provided."
     fitld = AIPSTask('fitld')
     fitld.outdata = uvdata
-    fitld.douvcomp = 1
-    fitld.clint = 0.25
+    fitld.douvcomp = douvcomp
+    fitld.clint = clint
     fitld.digicor = digicor
-    if fitsidifiles is not None:
-        fitld.ncount = len(glob.glob(f"{fitsidifiles}*"))
-        if fitld.ncount == 0:
-            raise FileNotFoundError(f"Could not find files with the name {fitsidifiles}")
-
-        fitld.infile = fitsidifiles
-        fitld.doconcat = 1
-    else:
-        fitld.ncount = 1
-        fitld.infile = uvfits
-        fitld.doconcat = 1
-
+    fitld.doconcat = doconcat
+    fitld.ncount = ncount
+    fitld.datain = datain
     fitld()
     return uvdata
 
 
-def indxr(uvdata, cparm=(0, 22, 0.25, 0)):
+def indxr(uvdata, cparm=[0, 22, 0.25, 0]):
     """Runs INDXR in the associated UVDATA.
     """
     indxr = AIPSTask('indxr')
@@ -98,18 +93,46 @@ def tacop(uvdata: AIPSUVData, fromuvdata: AIPSUVData, inext: str, inver: int, nc
     tacop()
 
 
-def ionos(uvdata: AIPSUVData, aparm=(1, 0, 1, 0.85, 56.7, 0.9782)):
-    # Run tecor
-    # Run clcal
-    raise NotImplementedError
+def ionos(uvdata: AIPSUVData, aparm=[1, 0, 1, 0.85, 56.7, 0.9782]):
+    # Replicates the VLBATECOR lines to grap the IONEX files
+    assert uvdata.exists()
+    nx = uvdata.table('NX', 1)
+    date_obs = dt.datetime.strptime(uvdata.header['date_obs'], '%Y-%m-%d')
+    dt0 = date_obs + dt.timedelta(days=nx[0]['time'])
+    dt1 = date_obs + dt.timedelta(days=nx[-1]['time'])
+    ionex_files = []
+    for a_day in range(dt0.day, dt1.day+1):
+        a_date = date_obs + dt.timedelta(days=a_day-date_obs.day)
+        ionex_files.append(f"jplg{a_date.strftime('%j')}0.{a_date.strftime('%y')}i")
+        if not Path(ionex_files[-1]).exists():
+            curl_cmd = ["curl", "-u", "anonymous:daip@nrao.edu", "--ftp-ssl",
+                        "ftp://gdc.cddis.eosdis.nasa.gov/gps/products/ionex/" \
+                        f"{a_date.year}/{a_date.strftime('%j')}/" \
+                        f"jplg{a_date.strftime('%j')}0.{a_date.strftime('%y')}i.Z", "-o",
+                        f"./jplg{a_date.strftime('%j')}0.{a_date.strftime('%y')}i.Z"]
+            # print(f"Trying {' '.join(curl_cmd)}")
+            r = subprocess.run(curl_cmd, shell=False, stdout=None, stderr=subprocess.STDOUT)
+            r.check_returncode()
+            r = subprocess.run(["gunzip", ionex_files[-1]+".Z"], shell=False, stdout=None,
+                               stderr=subprocess.STDOUT)
+            r.check_returncode()
+
+    tecor = AIPSTask('tecor')
+    tecor.indata = uvdata
+    tecor.nfiles = len(range(dt0.day, dt1.day+1))
+    tecor.gainver = max_table_no(uvdata, 'CL')
+    tecor.gainuse = max_table_no(uvdata, 'CL') + 1
+    tecor.aparm[1:] = aparm
+    tecor.infile = f"PWD:{ionex_files[0]}"
+    tecor()
 
 
 def fring(uvdata: AIPSUVData, calsour: list, solint: float, refant: list, docalib: int = 2,
           parmode: Optional[str] = None, aparm: list = None, dparm: list = None, snr: int = 0,
           gainuse: Optional[int] = None, flagver: Optional[int] = 0, snver: Optional[int] = None,
           doband: int = -1, bpver: int = -1, weightit: int = 1, model : Optional[AIPSImage] = None,
-          timer: list = (0, 0, 0, 0, 0, 0, 0, 0), cmethod: str = 'dft', bchan: int = 0,
-          echan: int = 0, antenna: list = [0]):
+          timer: list = [0, 0, 0, 0, 0, 0, 0, 0], cmethod: str = 'dft', bchan: int = 0,
+          echan: int = 0, antenna: list = []):
     """Runs FRING on the given data.
     Special functions:
     parmode : str 'mbd' or 'sbd' (default None)
@@ -120,7 +143,7 @@ def fring(uvdata: AIPSUVData, calsour: list, solint: float, refant: list, docali
     fring.indata = uvdata
     fring.calsour[1:] = calsour
     fring.timer[1:] = timer
-    fring.antenna[1:] = antenna
+    fring.antenna[1:] = [get_antenna_number(uvdata, a) if type(a) is str else a for a in antenna]
     fring.docalib = docalib
     if gainuse is None:
         fring.gainuse = max_table_no(uvdata, 'CL')
@@ -134,8 +157,8 @@ def fring(uvdata: AIPSUVData, calsour: list, solint: float, refant: list, docali
     fring.cmethod = cmethod
     fring.weightit = weightit
     fring.solint = solint
-    fring.refant = refant[0]
-    fring.search[1:] = refant[1:]
+    fring.refant = get_antenna_number(uvdata, refant[0]) if type(refant[0]) is str else refant[0]
+    fring.search[1:] = [get_antenna_number(uvdata, a) if type(a) is str else a for a in refant[1:]]
     if snver is None:
         fring.snver = max_table_no(uvdata, 'SN') + 1
     else:
@@ -147,11 +170,11 @@ def fring(uvdata: AIPSUVData, calsour: list, solint: float, refant: list, docali
         fring.flagver = flagver
 
     if parmode == 'sbd':
-        fring.aparm[1:] = (2, 0, 0, 0, 0, 1, 10 if snr == 0 else snr)
-        fring.dparm[1:] = (1, 200, 50, 2, 0, 0, 1, 0, 1)
+        fring.aparm[1:] = [2, 0, 0, 0, 0, 1, 10 if snr == 0 else snr]
+        fring.dparm[1:] = [1, 200, 50, 2, 0, 0, 1, 0, 1]
     elif parmode == 'mbd':
-        fring.aparm[1:] = (2, 0, 0, 0, 1, 1, 3 if snr == 0 else snr, 0, 1)
-        fring.dparm[1:] = (1, 200, 50, 2, 0, 0, 1, 0, 0)
+        fring.aparm[1:] = [2, 0, 0, 0, 1, 1, 3 if snr == 0 else snr, 0, 1]
+        fring.dparm[1:] = [1, 200, 50, 2, 0, 0, 1, 0, 0]
     else:
         raise ValueError(f"'parmode' can only be 'sbd' or 'mbd' (or None). But is {parmode}.")
 
@@ -162,7 +185,7 @@ def fring(uvdata: AIPSUVData, calsour: list, solint: float, refant: list, docali
 
 
 def clcal(uvdata: AIPSUVData, calsour: list, refant: list, snver: int, gainver: int, gainuse: int,
-          opcode: str = 'CALI', interpol: str = '2PT', sources: list = (''), samptype: str = '',
+          opcode: str = 'CALI', interpol: str = '2PT', sources: list = [''], samptype: str = '',
           doblank: int = 0, dobtween: int = 0):
     clcal = AIPSTask('clcal')
     clcal.indata = uvdata
@@ -174,27 +197,25 @@ def clcal(uvdata: AIPSUVData, calsour: list, refant: list, snver: int, gainver: 
     clcal.samptype = samptype
     clcal.doblank = doblank
     clcal.dobtween = dobtween
-    clcal.refant = refant[0]
+    clcal.refant = get_antenna_number(uvdata, refant[0]) if type(refant[0]) is str else refant[0]
     clcal.snver = snver
     clcal.gainver = gainver
     clcal.gainuse = gainuse
     clcal()
 
 
-def bpass(uvdata: AIPSUVData, calsour: list, refant: list, gainuse: int , bif: int = 0,
-          eif: int = 0, flagver: int = 0, docalib: int = 1, solint: int = -1,
-          soltype: str = 'L1R', bpver: int = 0, smooth: list = (1,),
-          bpassprm: list = (0, 0, 0, 0, 1, 0, 0, 0, 1), weightit: int = 1):
+def bpass(uvdata: AIPSUVData, calsour: list, refant: list, gainuse: int,
+          flagver: int = 0, docalib: int = 1, solint: int = -1,
+          soltype: str = 'L1R', bpver: int = 0, smooth: list = [1,],
+          bpassprm: list = [0, 0, 0, 0, 1, 0, 0, 0, 1], weightit: int = 1):
     bpass = AIPSTask('bpass')
     bpass.indata = uvdata
     bpass.calsour[1:] = calsour
-    bpass.bif = bif
-    bpass.eif = eif
     bpass.flagver = flagver
     bpass.docalib = docalib
     bpass.gainuse = gainuse
     bpass.solint = solint
-    bpass.refant = refant[0]
+    bpass.refant = get_antenna_number(uvdata, refant[0]) if type(refant[0]) is str else refant[0]
     bpass.soltype = soltype
     bpass.smooth[1:] = smooth
     bpass.bpassprm[1:] = bpassprm
@@ -228,19 +249,38 @@ def fittp(uvdata: Union[AIPSUVData, AIPSImage], dataout: str):
     fittp()
 
 
-def apriori_calibration(aipsid: int, projectname: str,
+def apriori_calibration(aipsid: int, projectname: str, replace=False,
                         fitsidifiles: Optional[str] = None,
-                        uvfits: Optional[str] = None):
+                        uvfits: Optional[str] = None, run_iono=True):
     """Runs the a-priori calibration in AIPS for VLBI data.
     """
     assert len(projectname) <= 6
     AIPS.userno = aipsid
-    uvdata = fitld(projectname, fitsidifiles=fitsidifiles, uvfits=uvfits, aipsclass="UVDATA")
-    indxr(uvdata)
-    uvtasav = fitld(projectname, fitsidifiles=fitsidifiles, uvfits=uvfits, aipsclass="TASAV")
-    tacop(uvdata, fromuvdata=uvtasav, inext='CL', inver=2, ncount=1, outver=2)
-    tacop(uvdata, fromuvdata=uvtasav, inext='FG', inver=1, ncount=1, outver=1)
-    # tecor(uvdata)
+    old_uv = AIPSUVData(projectname, "UVDATA", 1, 1).exists()
+
+    assert (fitsidifiles, uvfits).count(None) == 1, "One and only one of the 'fitsidifiles' or" \
+            " 'uvfits' parameters need to be provided."
+
+    if fitsidifiles is not None:
+        ncount = len(glob.glob(f"{fitsidifiles}*"))
+        if ncount == 0:
+            raise FileNotFoundError(f"Could not find files with the name {fitsidifiles}")
+
+        uvdata = fitld(projectname, datain=f"PWD:{fitsidifiles}", aipsclass="UVDATA",
+                       replace=replace, doconcat=1, ncount=ncount, digicor=-1)
+        uvtasav = fitld(projectname, datain=f"PWD:{projectname}.tasav.FITS", aipsclass="TASAV",
+                        replace=replace, doconcat=-1, ncount=1, digicor=-1)
+        if (not old_uv) or replace:
+            indxr(uvdata)
+            tacop(uvdata, fromuvdata=uvtasav, inext='CL', inver=2, ncount=1, outver=2)
+            tacop(uvdata, fromuvdata=uvtasav, inext='FG', inver=1, ncount=1, outver=1)
+    else:
+        uvdata = fitld(projectname, datain=f"PWD:{uvfits}", aipsclass="UVDATA",
+                       replace=replace, doconcat=-1, ncount=1, digicor=-1)
+
+    if run_iono:
+        ionos(uvdata)
+
     return uvdata
 
 
@@ -248,17 +288,19 @@ def apriori_calibration(aipsid: int, projectname: str,
 def main_calibration(aipsid: int, projectname: str,
                      sbd_timerange: list, refant: list, calsour: list, solint: float,
                      target: list, bpsour : list, phaseref: Optional[list] = None,
-                     import_uvfits: Optional[str, Path] = None, model: Optional[str, Path] = None,
+                     import_uvfits: Optional[str] = None, model: Optional[str] = None,
                      bchan: int = 0, echan: int = 0):
     """bpsour are the fringe finders and calsour should contain all calibrators
     """
     assert len(projectname) <= 6
     assert (aipsid >= 100) and (aipsid < 100000)
+    assert None not in (target, calsour, bpsour)
     AIPS.userno = aipsid
     if import_uvfits is not None:
-        uvdata = fitld(projectname, uvfits=import_uvfits, aipsclass="UVDATA")
+        uvdata = fitld(projectname, datain=f"PWD:{import_uvfits}", aipsclass="UVDATA")
     else:
         uvdata = AIPSUVData(projectname, "UVDATA", 1, 1)
+        assert uvdata.exists()
 
     if model is not None:
         # model = AIPSImage()
@@ -268,16 +310,17 @@ def main_calibration(aipsid: int, projectname: str,
         cl_last = max_table_no(uvdata, "CL")
         sn_last = max_table_no(uvdata, "SN")
         bp_last = max_table_no(uvdata, "BP")
-        if len(sbd_timerange) > 4:
+        print("THIS IS THE SBD TIMEE  ", sbd_timerange)
+        if len(sbd_timerange) > 8:
             fring(uvdata, calsour=[""], solint=10, refant=refant, parmode='sbd', gainuse=cl_last,
                   flagver=0, snver=sn_last+1, bpver = -1 if bp_last == 0 else bp_last, #model=model,
-                  timer=sbd_timerange[:4])
+                  timer=sbd_timerange[:8])
             clcal(uvdata, calsour=calsour, refant=refant, snver=sn_last+1, gainver=cl_last,
                   gainuse=cl_last+1, opcode='CALP')
             # TODO Double-check this was the right way to do it
             fring(uvdata, calsour=[""], solint=10, refant=refant, parmode='sbd', gainuse=cl_last+1,
                   flagver=0, snver=sn_last+2, bpver = -1 if bp_last == 0 else bp_last, #model=model,
-                  timer=sbd_timerange[4:])
+                  timer=sbd_timerange[8:])
             clcal(uvdata, calsour=calsour, refant=refant, snver=sn_last+2, gainver=cl_last+1,
                   gainuse=cl_last+2, opcode='CALP')
         else:
@@ -353,7 +396,10 @@ if __name__ == '__main__':
     parser.add_argument('--solint', type=float, default=5, help="solint for the global fringe.")
     parser.add_argument('--bchan', type=int, default=0, help="BCHAN parameter for split.")
     parser.add_argument('--echan', type=int, default=0, help="ECHAN parameter for split.")
-    parser.add_argument()
+    parser.add_argument('--iono', default=False, action="store_true",
+                        help="Runs the ionospheric corrections.")
+    parser.add_argument('--replace', default=False, action="store_true",
+                        help="If already exists, it will overwrite the existing files in AIPS.")
 
     args = parser.parse_args()
 
@@ -361,16 +407,19 @@ if __name__ == '__main__':
 
     if args.initial:
         uvfiles = apriori_calibration(args.aipsid, args.projectname, fitsidifiles=args.fits,
-                            uvfits=args.uvfits)
+                                      uvfits=args.uvfits, run_iono=args.iono, replace=args.replace)
 
     if args.calib:
+        assert None not in (args.target, args.fringefinder), \
+               "Both 'target' and 'fringefinder' must be provided."
         calsources = []
         for a_src in (args.target, args.phaseref, args.fringefinder):
             if a_src is not None:
                 calsources += a_src.split(',')
 
-        uvfiles = main_calibration(args.aipsid, args.projectname, sbd_timerange=args.sbdtime,
-                                   refant=args.refant, calsour=calsources, solint=args.solint,
+        uvfiles = main_calibration(args.aipsid, args.projectname,
+                                   sbd_timerange=[int(i) for i in args.sbdtime.split(',')],
+                                   refant=args.refant.split(','), calsour=calsources, solint=args.solint,
                                    target=args.target.split(','), bpsour=args.fringefinder.split(','),
                                    phaseref=args.phaseref.split(','),
                                    import_uvfits=args.uvfits if args.initial is False else None,
@@ -382,7 +431,11 @@ if __name__ == '__main__':
 
             fittp(uvfile, f"PWD:{str(outuvfile)}")
     else:
-        fittp(uvfiles, f"PWD:{args.projectname}.UVFITS")
+        outuvfile = Path(f"{args.projectname}.UVFITS")
+        if outuvfile.exists():
+            outuvfile.unlink()
+
+        fittp(uvfiles, f"PWD:{str(outuvfile)}")
 
 
 
