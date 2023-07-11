@@ -224,7 +224,7 @@ def bpass(uvdata: AIPSUVData, calsour: list, refant: list, gainuse: int,
 
 def split(uvdata: AIPSUVData, sources: list = [''], bif: int = 0, eif: int = 0, bchan: int = 0,
           echan: int = 0, docal: int = 1, gainuse: int = 0, flagver: int = 0, bpver: int = 0,
-          doband: int = 1, aparm: list = (2, 0, 0, 1), nchav: int = 0):
+          doband: int = 1, aparm: list = [2, 0, 0, 1], nchav: int = 0):
     split = AIPSTask('split')
     split.indata = uvdata
     split.sources[1:] = sources
@@ -292,6 +292,9 @@ def main_calibration(aipsid: int, projectname: str,
                      bchan: int = 0, echan: int = 0):
     """bpsour are the fringe finders and calsour should contain all calibrators
     """
+    #DEBUG:
+    file_debug = open('./debugging.log', 'w')
+
     assert len(projectname) <= 6
     assert (aipsid >= 100) and (aipsid < 100000)
     assert None not in (target, calsour, bpsour)
@@ -302,41 +305,61 @@ def main_calibration(aipsid: int, projectname: str,
         uvdata = AIPSUVData(projectname, "UVDATA", 1, 1)
         assert uvdata.exists()
 
+    #DEBUG:
+    file_debug.write(f"Running main calibration for {projectname} in AIPS NO {aipsid}.")
+
     if model is not None:
         # model = AIPSImage()
         raise NotImplementedError("Using a model in fring is not implemented yet in main_calibration")
+
+    # Removes the CL,SN,BP tables from previous calibrations
+    uvdata.zap_table("SN", -1)
+    uvdata.zap_table("BP", -1)
+    while max_table_no(uvdata, "CL") > 1:
+        uvdata.zap_table("CL", 0)
 
     for i in range(2):
         cl_last = max_table_no(uvdata, "CL")
         sn_last = max_table_no(uvdata, "SN")
         bp_last = max_table_no(uvdata, "BP")
-        print("THIS IS THE SBD TIMEE  ", sbd_timerange)
+        #DEBUG:
+        file_debug.write(f"UVDATA has CL {cl_last}, SN {sn_last}, BP {bp_last}.")
         if len(sbd_timerange) > 8:
             fring(uvdata, calsour=[""], solint=10, refant=refant, parmode='sbd', gainuse=cl_last,
                   flagver=0, snver=sn_last+1, bpver = -1 if bp_last == 0 else bp_last, #model=model,
                   timer=sbd_timerange[:8])
             clcal(uvdata, calsour=calsour, refant=refant, snver=sn_last+1, gainver=cl_last,
                   gainuse=cl_last+1, opcode='CALP')
+            #DEBUG:
+            file_debug.write(f"FRING1 and CLCAL has run. SN {sn_last+1} and CL {cl_last+1}")
             # TODO Double-check this was the right way to do it
             fring(uvdata, calsour=[""], solint=10, refant=refant, parmode='sbd', gainuse=cl_last+1,
                   flagver=0, snver=sn_last+2, bpver = -1 if bp_last == 0 else bp_last, #model=model,
                   timer=sbd_timerange[8:])
             clcal(uvdata, calsour=calsour, refant=refant, snver=sn_last+2, gainver=cl_last+1,
                   gainuse=cl_last+2, opcode='CALP')
+            #DEBUG:
+            file_debug.write(f"FRING2 and CLCAL has run. SN {sn_last+2} and CL {cl_last+1}")
         else:
             fring(uvdata, calsour=[""], solint=10, refant=refant, parmode='sbd', gainuse=cl_last,
                   flagver=0, snver=sn_last+1, bpver = -1 if bp_last == 0 else bp_last, #model=model,
                   timer=sbd_timerange)
             clcal(uvdata, calsour=calsour, refant=refant, snver=sn_last+1, gainver=cl_last,
                   gainuse=cl_last+1, opcode='CALP')
+            #DEBUG:
+            file_debug.write(f"FRING3 and CLCAL has run. SN {sn_last+1} and CL {cl_last+1}")
 
         cl_last = max_table_no(uvdata, "CL")
         sn_last = max_table_no(uvdata, "SN")
         fring(uvdata, calsour=calsour, solint=solint, refant=refant, parmode='mbd', gainuse=cl_last,
               flagver=0, snver=sn_last+1, bpver = -1 if bp_last == 0 else bp_last) # model=model
+        #DEBUG:
+        file_debug.write(f"FRING4 has run. SN {sn_last+1} using CL {cl_last}")
         for a_source in calsour:
             clcal(uvdata, calsour=[a_source,], sources=[a_source,], refant=refant, snver=sn_last+1,
                   gainver=cl_last, gainuse=cl_last+1, opcode='CALI', interpol='self')
+            #DEBUG:
+            file_debug.write(f"CLCAL has run. Using SN {sn_last+1} and creating CL {cl_last+1} for {a_source}.")
 
         if phaseref is None:
             # no phase reference!
@@ -349,17 +372,27 @@ def main_calibration(aipsid: int, projectname: str,
             if len(phaseref) == 1:
                 clcal(uvdata, calsour=phaseref, sources=target, refant=refant, snver=sn_last+1,
                       gainver=cl_last, gainuse=cl_last+1, opcode='CALI', interpol='ambg')
+                #DEBUG:
+                file_debug.write(f"CLCAL has run. Using SN {sn_last+1} and creating CL {cl_last+1} with one phase cal.")
             else:
                 for a_target, a_phaseref in zip(target, phaseref):
                     clcal(uvdata, calsour=[a_phaseref], sources=[a_target], refant=refant,
                           snver=sn_last+1, gainver=cl_last, gainuse=cl_last+1, opcode='CALI',
                           interpol='ambg')
+                    #DEBUG:
+                    file_debug.write(f"CLCAL has run. Using SN {sn_last+1} and creating CL {cl_last+1} for the pair phaseref {a_phaseref} and target {a_target}.")
 
         if i == 0:
-            bpass(uvdata, gainuse=cl_last+1, calsour=bpsour, refant=refant)
+            bpass(uvdata, gainuse=max_table_no(uvdata, "CL"), calsour=bpsour, refant=refant)
 
-    split(uvdata, sources=[''], bchan=bchan, echan=echan, gainuse=cl_last+1, doband=1,
-          bpver=bp_last, aparm=(2, 0, 0, 1))
+    file_debug.write(f"SPLITing the data with CL {max_table_no(uvdata, 'CL')} and BP {max_table_no(uvdata, 'BP')}.")
+    for a_source in list(set(target + bpsour + calsour)):
+        uv_src = AIPSUVData(a_source, "SPLIT", 1, 1)
+        if uv_src.exists():
+            uv_src.zap()
+
+    split(uvdata, sources=[''], bchan=bchan, echan=echan, gainuse=max_table_no(uvdata, "CL"), doband=1,
+          bpver=max_table_no(uvdata, "BP"), aparm=[2, 0, 0, 1])
     uvsplits = []
     for a_source in list(set(target + bpsour + calsour)):
         uv_src = AIPSUVData(a_source, "SPLIT", 1, 1)
@@ -367,6 +400,7 @@ def main_calibration(aipsid: int, projectname: str,
             fittp(uv_src, f"PWD:{projectname}.{a_source}.SPLIT.UVFITS")
             uvsplits.append(uv_src)
 
+    file_debug.close()
     return uvsplits
 
 

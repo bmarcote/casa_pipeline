@@ -746,7 +746,7 @@ class Calibration(object):
         casatasks.clearcal(vis=str(self._ms.msfile), **kwargs)
 
 
-    def create_cl_file(difmap_mod_file: str, outfile: str = 'component_list.cl'):
+    def create_cl_file(self, difmap_mod_file: str, outfile: str = 'component_list.cl'):
         """Creates a CASA-compatible file containing the component list of a given model created from Difmap.
         Code firsly done by Joe Bright during its visit to JIVE in 2022.
 
@@ -849,3 +849,24 @@ class Calibration(object):
 
 
 # casa task uvsubtraction()
+
+
+
+class Aips(object):
+    """Runs the calibration of a dataset in AIPS through ParselTongue.
+    """
+    def a_priori_calibration(self):
+        pass
+
+    def main_calibration(self):
+        pass
+
+    def __init__(self, ms: capi.Project):
+        self._ms = ms
+
+
+
+
+
+
+
