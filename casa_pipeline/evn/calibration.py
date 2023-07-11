@@ -1,7 +1,7 @@
 import os
 import shutil
 from pathlib import Path
-# import subprocess
+import subprocess
 import numpy as np
 from astropy.coordinates import SkyCoord
 import astropy.units as u
@@ -319,6 +319,14 @@ class Calibration(object):
         """
         return self._callib
 
+
+    @property
+    def aips(self):
+        """Access the calibration steps to be performed in AIPS through ParselTongue.
+        """
+        return self._aips
+
+
     def _verify(self, files: list):
         """Verifies that the given list of files (must contain a list of Path objects), exists.
         If they cannot be found, it will raise FileNotFoundError.
@@ -340,6 +348,7 @@ class Calibration(object):
         self._caldir = caldir
         self._callib = Callib(caldir / f"callib-{self._ms.projectname}.txt")
         self._sbd_timerange = None
+        self._aips = Aips(self._ms)
 
 
     # def copy_pols(self, antenna: Union[str, obsdata.Antenna], bad_pol: str, new_pol: str):
@@ -856,6 +865,9 @@ class Aips(object):
     """Runs the calibration of a dataset in AIPS through ParselTongue.
     """
     def a_priori_calibration(self):
+        cmd = ["ParselTongue", ""]
+        result = subprocess.run([], shell=False, stdout=None, stderr=subprocess.STDOUT)
+        result.check_returncode()
         pass
 
     def main_calibration(self):
