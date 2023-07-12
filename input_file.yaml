@@ -4,7 +4,7 @@
 ---
 project_name: a_name
 observatory: evn
-# epoch: DDMMYY
+#epoch: DDMMYY
 reference_antenna: "EF"
 
 sources:

@@ -221,6 +221,24 @@ def bpass(uvdata: AIPSUVData, calsour: list, refant: list, gainuse: int,
     bpass.bpassprm[1:] = bpassprm
     bpass()
 
+def splat(uvdata: AIPSUVData, sources: list = [''], bif: int = 0, eif: int = 0, bchan: int = 0,
+          echan: int = 0, docal: int = 1, gainuse: int = 0, flagver: int = 0, bpver: int = 0,
+          doband: int = 1, aparm: list = [2, 0, 0, 1], nchav: int = 0):
+    splat = AIPSTask('splat')
+    splat.indata = uvdata
+    splat.sources[1:] = sources
+    splat.bif = bif
+    splat.eif = eif
+    splat.bchan = bchan
+    splat.echan = echan
+    splat.docal = docal
+    splat.gainuse = gainuse
+    splat.flagver = flagver
+    splat.doband = doband
+    splat.bpver = bpver
+    splat.aparm[1:] = aparm
+    splat.nchav = nchav
+    splat()
 
 def split(uvdata: AIPSUVData, sources: list = [''], bif: int = 0, eif: int = 0, bchan: int = 0,
           echan: int = 0, docal: int = 1, gainuse: int = 0, flagver: int = 0, bpver: int = 0,
@@ -363,21 +381,19 @@ def main_calibration(aipsid: int, projectname: str,
         if iteration == 0:
             bpass(uvdata, gainuse=max_table_no(uvdata, "CL"), calsour=bpsour, refant=refant)
 
-    file_debug.write(f"SPLITing the data with CL {max_table_no(uvdata, 'CL')} and BP {max_table_no(uvdata, 'BP')}.")
     for a_source in list(set(target + bpsour + calsour)):
         uv_src = AIPSUVData(a_source, "SPLIT", 1, 1)
         if uv_src.exists():
             uv_src.zap()
 
-    split(uvdata, sources=[''], bchan=bchan, echan=echan, gainuse=max_table_no(uvdata, "CL"), doband=1,
-          bpver=max_table_no(uvdata, "BP"), aparm=[2, 0, 0, 1])
+    split(uvdata, sources=[''], bchan=bchan, echan=echan, gainuse=max_table_no(uvdata, "CL"),
+          doband=1, bpver=max_table_no(uvdata, "BP"), aparm=[2, 0, 0, 1])
     uvsplits = []
     for a_source in list(set(target + bpsour + calsour)):
         uv_src = AIPSUVData(a_source, "SPLIT", 1, 1)
         if uv_src.exists():
             uvsplits.append(uv_src)
 
-    file_debug.close()
     return uvsplits
 
 
@@ -446,7 +462,9 @@ if __name__ == '__main__':
         if outuvfile.exists():
             outuvfile.unlink()
 
-        fittp(uvfiles, f"PWD:{str(outuvfile)}")
+        splat(uvfiles, sources=[''], bchan=0, echan=0, gainuse=max_table_no(uvfiles, "CL"),
+              docal=1, doband=-1, aparm=[0])
+        fittp(AIPSUVData(args.projectname, "SPLAT", 1, 1), f"PWD:{str(outuvfile)}")
 
 
 

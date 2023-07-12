@@ -18,6 +18,7 @@ from natsort import natsort_keygen
 import casatasks
 from enum import Enum
 from astropy import units as u
+from astropy.io import fits
 from rich import print as rprint
 # import blessed
 from astropy import coordinates as coord
@@ -224,12 +225,14 @@ class Source(object):
 
         self._model = new_model
 
-    def __init__(self, name: str, sourcetype: SourceType, coordinates: coord.SkyCoord,
+    def __init__(self, name: str, sourcetype: SourceType,
+                 coordinates: Optional[coord.SkyCoord] = None,
                  model: Optional[Union[Path, str]] = None):
         assert isinstance(name, str), f"The name of the source must be a string (currrently {name})"
         assert isinstance(sourcetype, SourceType), \
                f"The name of the source must be a SourceType object (currrently {sourcetype})"
-        assert isinstance(coordinates, coord.SkyCoord), "The coordinates of the source must " \
+        assert isinstance(coordinates, coord.SkyCoord) or coordinates is None, \
+               "The coordinates of the source must " \
                f"be an astropy.coordinates.SkyCoord object (currently {coordinates})"
         self._name = name
         self._type = sourcetype
@@ -621,7 +624,8 @@ class Importing(object):
         expname = projectcode if projectcode is not None else self._ms.projectname
         if obsdate is None:
             try:
-                obsdate = self._ms.time.ymd if self._ms.time.ymd is not None else self._ms.params['epoch']
+                obsdate = self._ms.time.ymd if self._ms.time.ymd is not None else \
+                          self._ms.params['epoch']
             except KeyError:
                 rprint("[red bold]In order to download the EVN data, the 'epoch' (YYMMDD format) " \
                        "needs to be provided in the initial parameters.[/red bold]")
@@ -646,10 +650,32 @@ class Importing(object):
                                      f"pipe/{expname.lower()}.tasav.FITS.gz"])
         capi.tools.shell_command("gunzip", [f"{expname.lower()}.tasav.FITS.gz"])
 
-    def evn_aips_import(self, fitsidifiles: Union[list, str, None] = None, tasav_file: Union[str, None] = None):
-        """Because CASA is shit
+
+    def get_obsdate_from_fitsidi(self):
+        """Returns the observing epoch in datetime format as read from the FITS-IDI.
         """
-        pass
+        if self._ms.time.epoch is not None:
+            return self._ms.time.epoch
+
+        p = lambda x: Path(f"{self._ms.projectname}_1_1.IDI{x}")
+        a_fitsidi = p("1") if p("1").exists() else p("")
+        assert a_fitsidi.exists()
+        with fits.open(a_fitsidi) as hdu:
+            return dt.date.strptime(hdu[1].header['RDATE'], "%Y-%m-%d")
+
+
+    def get_freq_from_fitsidi(self) -> u.Quantity:
+        """Returns the central frequency of the observations as read from the FITS-IDI files.
+        """
+        if self._ms.freqsetup.frequency is not None:
+            return self._ms.freqsetup.frequency
+
+        p = lambda x: Path(f"{self._ms.projectname}_1_1.IDI{x}")
+        a_fitsidi = p("1") if p("1").exists() else p("")
+        assert a_fitsidi.exists()
+        with fits.open(a_fitsidi) as hdu:
+            return (hdu[1].header['REF_FREQ']*u.Hz).to(u.GHz)
+
 
     def evn_fitsidi(self, fitsidifiles: Union[list, str, None] = None, ignore_antab: bool = False,
                     ignore_uvflg: bool = False, delete: bool = False, replace_tsys: bool = False):
@@ -739,4 +765,23 @@ class Importing(object):
                                 scanreindexgap_s=8.0, specframe='GEO')
         rprint(f"[green]The file {self._ms.msfile} has been created[/green]")
         self._ms.get_metadata_from_ms()
+
+
+    def import_uvfits(self, uvfitsfile: Union[str, Path],
+                      delete: bool = False):
+        """Imports a UVFITS file into a MS.
+        """
+        if self._ms.msfile.exists():
+            if delete:
+                shutil.rmtree(self._ms.msfile)
+            else:
+                rprint(f"[bold yellow]The MS file {self._ms.msfile} already exists "
+                       "and you told me to not remove it[/bold yellow]")
+                raise FileExistsError
+
+        casatasks.importuvfits(fitsfile=str(uvfitsfile), vis=str(self._ms.msfile),
+                               antnamescheme='new')
+        self._ms.get_metadata_from_ms()
+
+
 

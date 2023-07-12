@@ -262,6 +262,18 @@ class Project(object):
         self._freqsetup = None
         self._last_step = None
 
+        for a_src in self._args['sources']['target']:
+            self._sources.add(capi.Source(name=a_src, sourcetype=capi.SourceType.target,
+                                          coordinates=None))
+
+        for a_src in self._args['sources']['phaseref']:
+            self._sources.add(capi.Source(name=a_src, sourcetype=capi.SourceType.calibrator,
+                                          coordinates=None))
+
+        for a_src in self._args['sources']['fringefinder']:
+            self._sources.add(capi.Source(name=a_src, sourcetype=capi.SourceType.fringefinder,
+                                          coordinates=None))
+
         for a_dir in (self.cwd, self.logdir, self.caldir, self.outdir):
             a_dir.mkdir(exist_ok=True)
 

@@ -1,8 +1,10 @@
 import os
 import shutil
+import string
 from pathlib import Path
 import subprocess
 import numpy as np
+import datetime as dt
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 from dataclasses import dataclass
@@ -864,14 +866,110 @@ class Calibration(object):
 class Aips(object):
     """Runs the calibration of a dataset in AIPS through ParselTongue.
     """
-    def a_priori_calibration(self):
-        cmd = ["ParselTongue", ""]
-        result = subprocess.run([], shell=False, stdout=None, stderr=subprocess.STDOUT)
-        result.check_returncode()
-        pass
+    def aipsno_from_project(self):
+        """Follows a personal way to get an AIPS no from EVN experiments which is:
+        for XXAAAB (e.g. EM123C), it takes the numeric part (123) and the epoch is
+        converted to a number following the alphabet, so the resulting AIPS no is 1233.
 
-    def main_calibration(self):
-        pass
+        Otherwise it returns 101.
+        """
+        alphabet = list(string.ascii_lowercase)
+        if self._ms.projectname[2:5].isnumeric():
+            aipsno = self._ms.projectname[2:5]
+            if len(self._ms.projectname) == 6:
+                aipsno += str(alphabet.index(self._ms.projectname[5].lower()) + 1)
+        else:
+            aipsno = '101'
+
+        return int(aipsno)
+
+
+    def converttime2aips(self, casa_time: str):
+        """Covnerts a time or timerange given in CASA format to AIPS format.
+        """
+        dt_time = []
+        aips_time = []
+        for a_time in casa_time.split('~'):
+            if '/' in a_time:
+                assert a_time.count('/') in (2, 3)
+                # it should then be YYYY/MM/DDHH:MM[:SS]
+                count_hhmm = a_time.count(':')
+                if count_hhmm == 0:
+                    dt_time.append(dt.datetime.strptime(a_time, "%Y/%m/%d"))
+                elif count_hhmm == 1:
+                    dt_time.append(dt.datetime.strptime(a_time, "%Y/%m/%d/%H:%M"))
+                elif count_hhmm == 2:
+                    dt_time.append(dt.datetime.strptime(a_time, "%Y/%m/%d/%H:%M:%S"))
+                else:
+                    raise ValueError("Unrecognized sbd_timerange ({casa_time}) to parse to AIPS.")
+
+        for a_time in dt_time:
+            aips_time += [(a_time.date() - self._ms.importdata.get_obsdate_from_fitsidi()).days,
+                          a_time.hour, a_time.minute, a_time.second]
+
+        return aips_time
+
+
+    def a_priori_calibration(self, aipsno: int = None, aips_fitsidifile: str = None):
+        aipsno = self.aipsno_from_project() if aipsno is None else aipsno
+        file_dir = os.path.dirname(os.path.realpath(__file__))
+        cmd = ["ParselTongue", file_dir + "/parseltongue.py", aipsno, self._ms.projectname,
+               "-i", "--replace", "--fits",
+               f"{self._ms.projectname}_1_1.IDI" if aips_fitsidifile is None else aips_fitsidifile
+               ]
+        result = subprocess.run(cmd, shell=False, stdout=None, stderr=subprocess.STDOUT)
+        result.check_returncode()
+        return f"{self._ms.projectname}.UVFITS"
+
+
+    def main_calibration(self, aipsno: int = None, uvfits: str = None):
+        aipsno = self.aipsno_from_project() if aipsno is None else aipsno
+        file_dir = os.path.dirname(os.path.realpath(__file__))
+        sbd_timerange = self.converttime2aips(self._ms.calibrate.get_sbd_timerange())
+
+        cmd = ["ParselTongue", file_dir + "/parseltongue.py", aipsno, self._ms.projectname,
+               "--uvfits", f"{self._ms.projectname}.UVFITS" if uvfits is None else uvfits,
+               "--target", ','.join(self._ms.sources.targets.names),
+               "--fringefinder", ','.join(self._ms.sources.fringe_finders.names),
+               "--refant", ','.join(self._ms.refant),
+               "--sbdtime", ','.join(sbd_timerange), "--replace"]
+        if len(self._ms.sources.phase_calibrators) > 0:
+            cmd += ["--phaseref", ','.join(self._ms.sources.phase_calibrators.names)]
+
+        if ('calibration' in self._ms.params) and \
+                                ('do_ionospheric' in self._ms.params['calibration']):
+            if self._ms.params['calibration']['do_ionospheric'] == "default":
+                if self._ms.freqsetup.frequency is not None:
+                    if self._ms.freqsetup.frequency < 6*u.GHz:
+                        cmd += ["--iono"]
+                else:
+                    if self._ms.importdata.get_freq_from_fitsidi() < 6*u.GHz:
+                        cmd += ["--iono"]
+            elif self._ms.params['calibration']['do_ionospheric']:
+                cmd += ["--iono"]
+        else:
+            if self._ms.freqsetup.frequency is not None:
+                if self._ms.freqsetup.frequency < 6*u.GHz:
+                    cmd += ["--iono"]
+            else:
+                if self._ms.importdata.get_freq_from_fitsidi() < 6*u.GHz:
+                    cmd += ["--iono"]
+
+        result = subprocess.run(cmd, shell=False, stdout=None, stderr=subprocess.STDOUT)
+        result.check_returncode()
+
+        splits = {}
+        for a_src in self._ms.sources.names:
+            if Path(f"{self._ms.projectname}.{a_src}.SPLIT.UVFITS").exists():
+
+                splits[a_src] = capi.Project(f"{self._ms.projectname}.{a_src}", cwd=self._ms.cwd,
+                                             params=self._ms.params, logger=self._ms._logger)
+                splits[a_src].importdata.import_uvfits(
+                        uvfitsfile=f"{self._ms.projectname}.{a_src}.SPLIT.UVFITS", delete=True)
+                self._ms.splits[a_src].append(splits[a_src])
+
+        return splits
+
 
     def __init__(self, ms: capi.Project):
         self._ms = ms
