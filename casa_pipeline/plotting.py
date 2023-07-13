@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
-
+import datetime as dt
+from typing import Optional, Union #, Iterable #, Tuple, NoReturn, List, Tuple
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import casa_pipeline as capi
 
+# TODO: I will need to add the headermatplotlib style
 
 
 
@@ -66,31 +72,61 @@ class Plotting(object):
         self._ms = ms
         self._jplotter = Jplotter(ms)
 
-    def autocorr(self, **kwargs):
+    def autocorr(self, outfile: Optional[str] = None, **kwargs):
         """Creates a plot
         """
         pass
 
-    def crosscorr(self, **kwargs):
+    def crosscorr(self, outfile: Optional[str] = None, **kwargs):
         pass
 
-    def anptime(self, **kwargs):
+    def anptime(self, outfile: Optional[str] = None, **kwargs):
         pass
 
-    def amptime(self, **kwargs):
+    def amptime(self, outfile: Optional[str] = None, **kwargs):
         pass
 
-    def phasetime(self, **kargs):
+    def phasetime(self, outfile: Optional[str] = None, **kargs):
         pass
 
-    def caltable(self, calname: str, **kargs):
+    def caltable(self, calname: str, outfile: Optional[str] = None, **kargs):
         pass
 
-    def radplot(self, mode='a&p', withmodel=False,**kargs):
+    def radplot(self, mode='a&p', withmodel=False, outfile: Optional[str] = None,**kargs):
         pass
 
-    def tplot(self, **kargs):
-        pass
+    def tplot(self, outfile: Optional[str] = None):
+        """Creates a plot with the antennas in the _y_ axis and time in the _x_ axis,
+        showing which antennas observed at each scan.
+        """
+        fig, ax = plt.subplots()
+        ants_scans = self._ms.scans_in_antennas()
+        # convert scans into time range
+        cmap = plt.get_cmap("tab10")
+        for s,a_src in enumerate(self._ms.sources.names):
+            src_scans = self._ms.scans_with_source(a_src)
+            for a,ant in enumerate(self._ms.antennas.names):
+                x = self._ms.times_for_scans(np.intersect1d(ants_scans[ant], src_scans))
+                t = (dt.datetime(1858, 11, 17, 0, 0, 2) + x*dt.timedelta(seconds=1))[0]
+                ax.scatter(x=t, y=np.ones_like(x)*a, s=1, color=cmap(s), rasterize=True, label=a_src)
+
+
+        ax.set_xlabel(r'Time (UTC)')
+        ax.set_ylabel(r'Antenna Name')
+        ax.set_yticks(range(len(self._ms.antennas)), self._ms.antennas.names)
+        ax.legend()
+        if outfile is None:
+            fig.savefig(f"{self._ms.outdir}/plot-{self._ms.projectname}-tplot.pdf", dpi=330,
+                        bbox_inches='tight', pad_inches=0.01)
+        else:
+            fig.savefig(outfile, dpi=330, bbox_inches='tight', pad_inches=0.01)
+
+        plt.close()
+
+
+
+
+
 
     # def phasetime(self, **kargs):
     #     pass

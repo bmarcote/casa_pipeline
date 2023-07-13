@@ -18,6 +18,9 @@ from casatools import msmetadata as msmd
 from casatools import table as tb
 
 
+import time
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+
 
 _SCI_PACKAGE = ('CASA', 'AIPS')
 _OBSERVATORIES = ('EVN', 'LBA', 'GMRT')
@@ -319,8 +322,14 @@ class Project(object):
         # self.store()
 
 
-    def get_metadata_from_ms(self):
+    def get_metadata_from_ms(self, chunks: int = 100):
         """Recovers all useful metadata from the MS file and stores it in the object.
+
+        Inputs
+        ------
+            - chunks : int  (default = 100)
+              When reading through the MS, it reads it in chunks of the specified amount.
+              A value of 100 has been observed to provided the fastest I/O times.
 
         -- May Raise
         It may raise KeyError if the type of sources (target, phaseref, fringefinder)
@@ -333,9 +342,8 @@ class Project(object):
         try:
             self._antennas = capi.Antennas()
             antenna_names = m.antennanames()
-
             for ant_name in antenna_names:
-                ant = capi.Antenna(name=ant_name, observed=True)
+                ant = capi.Antenna(name=ant_name, observed=False)
                 self.antennas.add(ant)
 
             spw_names = range(m.nspw())
@@ -344,7 +352,7 @@ class Project(object):
                 self._observatory_name = telescope_name
             elif self.observatory != telescope_name:
                 rprint("[yellow]WARNING: the observatory name in MS does not match the one "
-                       "provided in the project[/yellow]")
+                       f"provided in the project ({self.observatory} vs {telescope_name}).[/yellow]")
 
             self._sources = capi.Sources()
             src_names = m.fieldnames()
@@ -400,34 +408,29 @@ class Project(object):
         finally:
             m.close()
 
+
+        ants_observed = set()
+        scans = self.scan_numbers()
+        scans_ants = self.antennas_in_scans(scans)
+        for scan in scans_ants:
+            for ant in scan:
+                ants_observed.add(ant)
+
+        for ant in ants_observed:
+            self.antennas[ant].observed = True
+
+        # Now to get which subbands each antenna observed
         m = tb(str(self.msfile))
         try:
             if not m.open(str(self.msfile)):
-                return ValueError(f"The MS file {self.msfile} could not be openned.")
+                raise ValueError(f"The MS file {self.msfile} could not be openned.")
 
             ant_subband = defaultdict(set)
-            # TODO: parallelize the following. This approach blocks indefinitely. Because of the MS.
-            # if test:
-            #     ant_subband_mutex = Lock()
-            #     rprint('\n[bold]Reading the MS to find which antennas actually observed.[/bold]')
-            #     with futures.ProcessPoolExecutor(max_workers=8) as executor:
-            #         workers = []
-            #         with progress.Progress() as progress_bar:
-            #             task = progress_bar.add_task("[yellow]Reading MS...", total=nrows)
-            #             for (start, nrow) in tools.chunkert(0, nrows, 5000):
-            #                 kwargs = {'mset': m, 'ant_subband_dict': ant_subband,
-            #                           'startrow': start,
-            #                           'nrow': nrow, 'antenna_names': antenna_names,
-            #                           'spw_names': spw_names, 'corr_pos': corr_pos,
-            #                           'mutex': ant_subband_mutex}
-            #                 print(f"Launching {start}")
-            #                 workers.append(executor.submit(self._get_spw_per_ant, **kwargs))
-            #                 progress_bar.update(task, advance=nrow)
-            # else:
             rprint('\n[bold]Reading the MS to find which antennas actually observed...[/bold]')
+            start_time = time.time()
             with progress.Progress() as progress_bar:
                 task = progress_bar.add_task("[yellow]Reading MS...", total=nrows)
-                for (start, nrow) in capi.tools.chunkert(0, nrows, 5000):
+                for (start, nrow) in capi.tools.chunkert(0, nrows, chunks):
                     ants1 = m.getcol('ANTENNA1', startrow=start, nrow=nrow)
                     ants2 = m.getcol('ANTENNA2', startrow=start, nrow=nrow)
                     spws = m.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
@@ -435,36 +438,40 @@ class Project(object):
 
                     for ant_i,antenna_name in enumerate(antenna_names):
                         for spw in spw_names:
-                            cond = np.where((ants1 == ant_i) & (ants2 == ant_i) & (spws == spw))
+                            cond = np.where(((ants1 == ant_i) | (ants2 == ant_i)) & (spws == spw))
                             if not (abs(msdata[corr_pos][:, :, cond[0]]) < 1e-5).all():
                                 ant_subband[antenna_name].add(spw)
+                            # testing a much faster check...  But it picks everything
+                            # if len(cond[0]) > 0:
+                            #     ant_subband[antenna_name].add(spw)
 
                     progress_bar.update(task, advance=nrow)
         finally:
             m.close()
 
+        rprint(f"[green]Total time elapsed: {(time.time()-start_time)/60:.2f} min with {chunks}[/green]")
         for antenna_name in self.antennas.names:
             self.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
+            # this is the same as two segments before, but in case one antenna just sent zero data...
             self.antennas[antenna_name].observed = len(self.antennas[antenna_name].subbands) > 0
 
         self.listobs()
         self.summary()
 
 
-    def _get_spw_per_ant(self, mset, ant_subband_dict, startrow, nrow, antenna_names, spw_names,
-                         corr_pos, mutex):
-        ants1 = mset.getcol('ANTENNA1', startrow=startrow, nrow=nrow)
-        ants2 = mset.getcol('ANTENNA2', startrow=startrow, nrow=nrow)
-        spws = mset.getcol('DATA_DESC_ID', startrow=startrow, nrow=nrow)
-        msdata = mset.getcol('DATA', startrow=startrow, nrow=nrow)
-        for ant_i,antenna_name in enumerate(antenna_names):
-            for spw in spw_names:
-                cond = np.where((ants1 == ant_i) & (ants2 == ant_i) & (spws == spw))
-                if not (abs(msdata[corr_pos][:, :, cond[0]]) < 1e-5).all():
-                    mutex.acquire()
-                    ant_subband_dict[antenna_name].add(spw)
-                    mutex.release()
+    def scan_numbers(self) -> list:
+        """Returns the list of scans that were observed in the observation.
+        """
+        m = msmd(str(self.msfile))
+        try:
+            if not m.open(str(self.msfile)):
+                return ValueError(f"The MS file {self.msfile} could not be openned.")
 
+            scannumbers = m.scannumbers()
+        finally:
+            m.close()
+
+        return scannumbers
 
     def antennas_in_scan(self, scanno: int) -> list:
         """Returns a list with all antennas that observed the given scan.
@@ -475,11 +482,45 @@ class Project(object):
                 return ValueError(f"The MS file {self.msfile} could not be openned.")
 
             antenna_names = m.antennanames()
-            ant_ids = m.antennasforscan(scanno)
+            return [antenna_names[a] for a in m.antennasforscan(scanno)]
         finally:
             m.close()
 
-        return [antenna_names[a] for a in ant_ids]
+
+    def antennas_in_scans(self, scanno: list) -> list:
+        """Returns a list with all antennas that observed each given scan.
+        """
+        m = msmd(str(self.msfile))
+        scan_list = []
+        try:
+            if not m.open(str(self.msfile)):
+                return ValueError(f"The MS file {self.msfile} could not be openned.")
+
+            antenna_names = m.antennanames()
+            # with progress.Progress() as progress_bar:
+            #     task = progress_bar.add_task("[yellow]Going through scans[/yellow]", total=len(scanno))
+            # Fast enough that it does not need any progress bar
+            for scan in scanno:
+                scan_list.append([antenna_names[ant] for ant in m.antennasforscan(scan)])
+                # progress_bar.update(task, advance=1)
+
+            return scan_list
+        finally:
+            m.close()
+
+    def scans_in_antennas(self) -> dict:
+        """Returns a dictionary with all antennas that observed as keys and a list of all scans
+        that they observed as values.
+        """
+        all_scans = self.scan_numbers()
+        scan_list = self.antennas_in_scans(all_scans)
+        ant_list = {ant: [] for ant in self.antennas.names}
+        for ant in ant_list:
+            for i,scan  in enumerate(scan_list):
+                if ant in scan:
+                    ant_list[ant].append(all_scans[i])
+
+        return ant_list
 
 
     def scans_with_source(self, source_name: str) -> list:
@@ -490,10 +531,34 @@ class Project(object):
             if not m.open(str(self.msfile)):
                 return ValueError(f"The MS file {self.msfile} could not be openned.")
 
-            scans = m.scansforfield(source_name)
+            return m.scansforfield(source_name)
         finally:
             m.close()
-        return scans
+
+    def times_for_scans(self, scanno: list) -> list:
+        """Returns the time for the specified scan number.
+        """
+        m = msmd(str(self.msfile))
+        try:
+            if not m.open(str(self.msfile)):
+                return ValueError(f"The MS file {self.msfile} could not be openned.")
+
+            return m.timesforscans(scanno)
+        finally:
+            m.close()
+
+
+    def times_for_scan(self, scanno: int) -> list:
+        """Returns the time for the specified scan number.
+        """
+        m = msmd(str(self.msfile))
+        try:
+            if not m.open(str(self.msfile)):
+                return ValueError(f"The MS file {self.msfile} could not be openned.")
+
+            return m.timesforscan(scanno)
+        finally:
+            m.close()
 
 
     def listobs(self, listfile: Union[Path, str] = None, overwrite=True) -> dict:
@@ -660,8 +725,12 @@ class Project(object):
         s_file += ["   Did Observe?  Subbands"]
         for ant in self.antennas:
             if ant.observed:
-                s_file += [f"{ant.name} yes " \
-                           f"{' '*(3*(ant.subbands[0]))}{ant.subbands}"]
+                try:
+                    s_file += [f"{ant.name} yes " \
+                               f"{' '*(3*(ant.subbands[0]))}{ant.subbands}"]
+                except IndexError:
+                    s_file += [f"{ant.name} yes " \
+                               f"{' '*3}{ant.subbands}"]
             else:
                 s_file += [f"{ant.name} no"]
 

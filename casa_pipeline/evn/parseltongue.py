@@ -223,7 +223,8 @@ def bpass(uvdata: AIPSUVData, calsour: list, refant: list, gainuse: int,
 
 def splat(uvdata: AIPSUVData, sources: list = [''], bif: int = 0, eif: int = 0, bchan: int = 0,
           echan: int = 0, docal: int = 1, gainuse: int = 0, flagver: int = 0, bpver: int = 0,
-          doband: int = 1, aparm: list = [2, 0, 0, 1], nchav: int = 0):
+          doband: int = 1, aparm: list = [0], stokes: str = '', ichansel: list = [0, 0, 0],
+          channel: int = 0, chinc: int = 1, solint: int = 0):
     splat = AIPSTask('splat')
     splat.indata = uvdata
     splat.sources[1:] = sources
@@ -237,7 +238,12 @@ def splat(uvdata: AIPSUVData, sources: list = [''], bif: int = 0, eif: int = 0, 
     splat.doband = doband
     splat.bpver = bpver
     splat.aparm[1:] = aparm
-    splat.nchav = nchav
+    splat.stokes = stokes
+    # TODO: somehow this is not accepting a [0], nor [0, 0,]...
+    # splat.ichansel[1:] = ichansel
+    splat.channel = channel
+    splat.chinc = chinc
+    splat.solint = solint
     splat()
 
 def split(uvdata: AIPSUVData, sources: list = [''], bif: int = 0, eif: int = 0, bchan: int = 0,
@@ -284,14 +290,17 @@ def apriori_calibration(aipsid: int, projectname: str, replace=False,
         if ncount == 0:
             raise FileNotFoundError(f"Could not find files with the name {fitsidifiles}")
 
+        # uvdata = AIPSUVData(projectname, "UVDATA", 1, 1)
+        # uvtasav = AIPSUVData(projectname, "TASAV", 1, 1)
         uvdata = fitld(projectname, datain=f"PWD:{fitsidifiles}", aipsclass="UVDATA",
                        replace=replace, doconcat=1, ncount=ncount, digicor=-1)
         uvtasav = fitld(projectname, datain=f"PWD:{projectname}.tasav.FITS", aipsclass="TASAV",
                         replace=replace, doconcat=-1, ncount=1, digicor=-1)
+        indxr(uvdata)
         if (not old_uv) or replace:
-            indxr(uvdata)
             tacop(uvdata, fromuvdata=uvtasav, inext='CL', inver=2, ncount=1, outver=2)
             tacop(uvdata, fromuvdata=uvtasav, inext='FG', inver=1, ncount=1, outver=1)
+
     else:
         uvdata = fitld(projectname, datain=f"PWD:{uvfits}", aipsclass="UVDATA",
                        replace=replace, doconcat=-1, ncount=1, digicor=-1)
@@ -316,6 +325,7 @@ def main_calibration(aipsid: int, projectname: str,
     AIPS.userno = aipsid
     if import_uvfits is not None:
         uvdata = fitld(projectname, datain=f"PWD:{import_uvfits}", aipsclass="UVDATA")
+        assert uvdata.exists()
     else:
         uvdata = AIPSUVData(projectname, "UVDATA", 1, 1)
         assert uvdata.exists()

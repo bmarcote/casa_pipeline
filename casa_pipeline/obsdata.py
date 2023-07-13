@@ -25,6 +25,7 @@ from astropy import coordinates as coord
 from casa_pipeline.casavlbitools import fitsidi
 from casa_pipeline.casa_pipeline import check_antab_idi
 import casa_pipeline as capi
+from casatools import table as tb
 
 
 # Because as far as I know CASA folks do not have a straight away to get this simple information
@@ -667,7 +668,7 @@ class Importing(object):
     def get_freq_from_fitsidi(self) -> u.Quantity:
         """Returns the central frequency of the observations as read from the FITS-IDI files.
         """
-        if self._ms.freqsetup.frequency is not None:
+        if self._ms.freqsetup is not None:
             return self._ms.freqsetup.frequency
 
         p = lambda x: Path(f"{self._ms.projectname}_1_1.IDI{x}")
@@ -767,6 +768,31 @@ class Importing(object):
         self._ms.get_metadata_from_ms()
 
 
+    def _fix_ant_names(self, msdata: Optional[Union[str, Path]] = None):
+        """Fixes the antenna table in a MS.
+        When imported from a UVFITS from AIPS, the antenna names are dropped and the antenna
+        name column contains numbers intead. Luckily, the antenna names are preserved in the site
+        column. Which this function recovers to write them again into the antenna names.
+        """
+        msdata = self._ms.msfile if msdata is None else msdata
+
+        m = tb(str(msdata))
+        if not m.open(str(msdata)):
+            raise ValueError(f"The MS file {msdata} could not be openned.")
+
+        msanttable = m.getkeyword('ANTENNA').replace('Table: ', '')
+
+        m = tb(str(msanttable))
+        if not m.open(msanttable, nomodify=False):
+            raise ValueError(f"The MS file {msanttable} could not be openned.")
+
+        antnames = m.getcol('NAME')
+        if antnames[0].isnumeric():
+            m.putcol('NAME', m.getcol('STATION'))
+
+        m.done()  # just because I would not trust the CASA code...
+
+
     def import_uvfits(self, uvfitsfile: Union[str, Path],
                       delete: bool = False):
         """Imports a UVFITS file into a MS.
@@ -781,6 +807,8 @@ class Importing(object):
 
         casatasks.importuvfits(fitsfile=str(uvfitsfile), vis=str(self._ms.msfile),
                                antnamescheme='new')
+        # Fixing the antenna name columns... from AIPS the antenna names are moved to numbers
+        self._fix_ant_names(str(self._ms.msfile))
         self._ms.get_metadata_from_ms()
 
 

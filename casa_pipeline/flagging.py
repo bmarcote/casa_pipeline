@@ -1,6 +1,7 @@
 import casatasks
 from pathlib import Path
 from typing import Optional, Iterable, NoReturn, List, Union, Tuple
+from rich import print as rprint
 import casa_pipeline as capi
 
 class Flagging(object):
@@ -21,7 +22,11 @@ class Flagging(object):
 
         flagfile = (self._ms.cwd / f"{self._ms.projectname.lower()}.flag") if flagfile is None \
                    else flagfile
-        assert flagfile.exists(), f"The flagfile {flagfile} cannot be found."
+
+        if not flagfile.exists():
+            rprint(f"[bold red]The flag file {flagfile} should exist but cannot be found.[/bold red]")
+            raise FileNotFoundError(f"The flagfile {flagfile} cannot be found.")
+
         results = casatasks.flagdata(vis=str(self._ms.msfile), mode='list', inpfile=str(flagfile),
                            reason='any', action='apply', flagbackup=False, savepars=False)
         casatasks.flagmanager(vis=str(self._ms.msfile), mode='save',

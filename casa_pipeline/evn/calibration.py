@@ -910,13 +910,34 @@ class Aips(object):
         return aips_time
 
 
-    def a_priori_calibration(self, aipsno: int = None, aips_fitsidifile: str = None):
+    def a_priori_calibration(self, aipsno: Optional[int] = None,
+                             aips_fitsidifile: Optional[str] = None):
         aipsno = self.aipsno_from_project() if aipsno is None else aipsno
         file_dir = os.path.dirname(os.path.realpath(__file__))
-        cmd = ["ParselTongue", file_dir + "/parseltongue.py", aipsno, self._ms.projectname,
+        cmd = ["ParselTongue", file_dir + "/parseltongue.py", str(aipsno), self._ms.projectname,
                "-i", "--replace", "--fits",
                f"{self._ms.projectname}_1_1.IDI" if aips_fitsidifile is None else aips_fitsidifile
                ]
+        if ('calibration' in self._ms.params) and \
+                                ('do_ionospheric' in self._ms.params['calibration']):
+            if self._ms.params['calibration']['do_ionospheric'] == "default":
+                if self._ms.freqsetup.frequency is not None:
+                    if self._ms.freqsetup.frequency < 6*u.GHz:
+                        cmd += ["--iono"]
+                else:
+                    if self._ms.importdata.get_freq_from_fitsidi() < 6*u.GHz:
+                        cmd += ["--iono"]
+            elif self._ms.params['calibration']['do_ionospheric']:
+                cmd += ["--iono"]
+        else:
+            if self._ms.freqsetup is not None:
+                if self._ms.freqsetup.frequency < 6*u.GHz:
+                    cmd += ["--iono"]
+            else:
+                if self._ms.importdata.get_freq_from_fitsidi() < 6*u.GHz:
+                    cmd += ["--iono"]
+
+        rprint(f"\n[bold]{' '.join(cmd)}[/bold]")
         result = subprocess.run(cmd, shell=False, stdout=None, stderr=subprocess.STDOUT)
         result.check_returncode()
         return f"{self._ms.projectname}.UVFITS"
@@ -936,25 +957,7 @@ class Aips(object):
         if len(self._ms.sources.phase_calibrators) > 0:
             cmd += ["--phaseref", ','.join(self._ms.sources.phase_calibrators.names)]
 
-        if ('calibration' in self._ms.params) and \
-                                ('do_ionospheric' in self._ms.params['calibration']):
-            if self._ms.params['calibration']['do_ionospheric'] == "default":
-                if self._ms.freqsetup.frequency is not None:
-                    if self._ms.freqsetup.frequency < 6*u.GHz:
-                        cmd += ["--iono"]
-                else:
-                    if self._ms.importdata.get_freq_from_fitsidi() < 6*u.GHz:
-                        cmd += ["--iono"]
-            elif self._ms.params['calibration']['do_ionospheric']:
-                cmd += ["--iono"]
-        else:
-            if self._ms.freqsetup.frequency is not None:
-                if self._ms.freqsetup.frequency < 6*u.GHz:
-                    cmd += ["--iono"]
-            else:
-                if self._ms.importdata.get_freq_from_fitsidi() < 6*u.GHz:
-                    cmd += ["--iono"]
-
+        rprint(f"\n[bold]{' '.join(cmd)}[/bold]")
         result = subprocess.run(cmd, shell=False, stdout=None, stderr=subprocess.STDOUT)
         result.check_returncode()
 
