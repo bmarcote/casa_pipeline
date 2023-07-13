@@ -623,7 +623,7 @@ class Project(object):
 
 
     def export_uvfits(self, outfitsfilename: Union[str, None] = None, overwrite=True,
-                      datacolumn='corrected', combinespw=None, padwithflags=True):
+                      datacolumn='corrected', combinespw=True, padwithflags=True):
         """Export the available MS file into a UVFITS file, per source.
         """
         if outfitsfilename is None:
