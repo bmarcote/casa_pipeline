@@ -107,13 +107,14 @@ class Plotting(object):
             src_scans = self._ms.scans_with_source(a_src)
             for a,ant in enumerate(self._ms.antennas.names):
                 x = self._ms.times_for_scans(np.intersect1d(ants_scans[ant], src_scans))
-                t = (dt.datetime(1858, 11, 17, 0, 0, 2) + x*dt.timedelta(seconds=1))[0]
-                ax.scatter(x=t, y=np.ones_like(x)*a, s=1, color=cmap(s), rasterize=True, label=a_src)
+                t = (dt.datetime(1858, 11, 17, 0, 0, 2) + x*dt.timedelta(seconds=1))
+                ax.scatter(x=t, y=np.ones_like(t)*a, s=1, color=cmap(s), rasterized=True, label=a_src)
 
 
         ax.set_xlabel(r'Time (UTC)')
         ax.set_ylabel(r'Antenna Name')
         ax.set_yticks(range(len(self._ms.antennas)), self._ms.antennas.names)
+        ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%H:%M"))
         ax.legend()
         if outfile is None:
             fig.savefig(f"{self._ms.outdir}/plot-{self._ms.projectname}-tplot.pdf", dpi=330,
