@@ -441,6 +441,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     assert (args.aipsid >= 100) and (args.aipsid < 100000)
+    assert args.initial or args.calib, "At least one --initial (-i) or --calib (-c) are required."
 
     if args.initial:
         uvfiles = apriori_calibration(args.aipsid, args.projectname, fitsidifiles=args.fits,

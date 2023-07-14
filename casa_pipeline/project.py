@@ -215,6 +215,7 @@ class Project(object):
                "The project name needs to be a non-empty string."
         self._projectname = projectname
 
+        self._logging_level = logging_level
         logging.basicConfig(level=logging_level, format="%(asctime)s %(levelname)s:\n%(message)s",
                             datefmt="%Y-%m-%d %H:%M")
         self._logger = logging.getLogger(self.projectname)
@@ -456,7 +457,7 @@ class Project(object):
             self.antennas[antenna_name].observed = len(self.antennas[antenna_name].subbands) > 0
 
         self.listobs()
-        self.summary()
+        # self.summary()
 
 
     def scan_numbers(self) -> list:

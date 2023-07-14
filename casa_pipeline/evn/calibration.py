@@ -951,8 +951,8 @@ class Aips(object):
                "--uvfits", f"{self._ms.projectname}.UVFITS" if uvfits is None else uvfits,
                "--target", ','.join(self._ms.sources.targets.names),
                "--fringefinder", ','.join(self._ms.sources.fringe_finders.names),
-               "--refant", ','.join(self._ms.refant),
-               "--sbdtime", f"'{','.join([str(t) for t in sbd_timerange])}'", "--replace"]
+               "--refant", ','.join(self._ms.refant), "--calib",
+               "--sbdtime", ','.join([str(t) for t in sbd_timerange]), "--replace"]
         if len(self._ms.sources.phase_calibrators) > 0:
             cmd += ["--phaseref", ','.join(self._ms.sources.phase_calibrators.names)]
 
@@ -964,7 +964,7 @@ class Aips(object):
         for a_src in self._ms.sources.names:
             if Path(f"{self._ms.projectname}.{a_src}.SPLIT.UVFITS").exists():
                 splits[a_src] = capi.Project(f"{self._ms.projectname}.{a_src}", cwd=self._ms.cwd,
-                                             params=self._ms.params, logger=self._ms._logger)
+                                             params=self._ms.params, logging_level=self._ms._logging_level)
                 splits[a_src].importdata.import_uvfits(
                         uvfitsfile=f"{self._ms.projectname}.{a_src}.SPLIT.UVFITS", delete=True)
                 self._ms.splits[a_src].append(splits[a_src])
