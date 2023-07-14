@@ -465,7 +465,7 @@ if __name__ == '__main__':
                                    target=args.target.split(','), bpsour=args.fringefinder.split(','),
                                    phaseref=args.phaseref.split(','),
                                    import_uvfits=args.uvfits if args.initial is False else None,
-                                   model=None, bchan=args.bchan, echan=args.echan)
+                                   model=None, bchan=args.bchan, echan=args.echan, avgchan_split=args.avgchan)
         for uvfile in uvfiles:
             outuvfile = Path(f"{args.projectname}.{uvfile.name}.SPLIT.UVFITS")
             if outuvfile.exists():

@@ -571,7 +571,8 @@ class Project(object):
 
 
     def split(self, sources: Optional[Union[Iterable[str], str, None]] = None,
-              keepflags=False, chanbin: int =-1, inplace=False, **kwargs):
+              datacolumn='corrected', keepflags=False, chanbin: int = -1,
+              inplace=False, **kwargs):
         """Splits all the data from all calibrated sources.
         If sources is None, then all sources will be split.
 
@@ -586,6 +587,9 @@ class Project(object):
 
         It returns a dict with all split source names as keys. The values are the new Ms objects.
         """
+        np.int = int
+        np.float = float  # these two is because CASA uses deprecated types in newer numpy ver!
+
         splits = {}
 
         if isinstance(sources, str):
@@ -603,9 +607,12 @@ class Project(object):
         else:
             sources = self.sources.names
 
-        if chanbin == -1 or chanbin > 1:
+        if ((chanbin == -1) or (chanbin > 1)) and (self.freqsetup.channels > 1):
             kwargs['chanaverage'] = True
             kwargs['chanbin'] = self.freqsetup.channels
+        else:
+            kwargs['chanaverage'] = False
+            kwargs['chanbin'] = 1
 
         if inplace:
             suffix = 1
@@ -614,7 +621,7 @@ class Project(object):
 
             ms_name = f"{self.projectname}{'' if suffix == 1 else '.'+str(suffix)}.ms"
             casatasks.mstransform(vis=str(self.msfile), outputvis=ms_name,
-                                  keepflags=keepflags, **kwargs)
+                                  keepflags=keepflags, datacolumn=datacolumn, **kwargs)
             self._msfile = Path(ms_name)
         else:
             suffix = 1
@@ -623,13 +630,11 @@ class Project(object):
                 suffix += 1
 
             for a_source in sources:
-                np.int = int
-                np.float = float  # these two is because CASA uses deprecated types in newer numpy ver!
                 try:
                     ms_name = f"{self.projectname}.{a_source}" \
                               f"{'' if suffix == 1 else '.'+str(suffix)}.ms"
                     casatasks.mstransform(vis=str(self.msfile), outputvis=ms_name,
-                                          field=a_source, keepflags=keepflags, **kwargs)
+                                          field=a_source, keepflags=keepflags, datacolumn=datacolumn, **kwargs)
                     splits[a_source] = Project(ms_name.replace('.ms', ''), cwd=self.cwd,
                                           params=self.params, logger=self._logger)
                     self.splits[a_source].append(splits[a_source])
