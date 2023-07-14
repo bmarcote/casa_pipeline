@@ -3,18 +3,17 @@ import shutil
 import string
 from pathlib import Path
 import subprocess
-import numpy as np
 import datetime as dt
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 from dataclasses import dataclass
-from typing import Optional, Iterable, Union
+from typing import Optional, Union
 from rich import print as rprint
 import casatasks
 from casatasks.private import tec_maps
 from casatools import table as tb
 from casatools import componentlist as cl
-from casatools import msmetadata as msmd
+# from casatools import msmetadata as msmd
 from casatools import table as tb
 import casa_pipeline as capi
 
@@ -943,17 +942,17 @@ class Aips(object):
         return f"{self._ms.projectname}.UVFITS"
 
 
-    def main_calibration(self, aipsno: int = None, uvfits: str = None):
+    def main_calibration(self, aipsno: Optional[int] = None, uvfits: Optional[str] = None):
         aipsno = self.aipsno_from_project() if aipsno is None else aipsno
         file_dir = os.path.dirname(os.path.realpath(__file__))
         sbd_timerange = self.converttime2aips(self._ms.calibrate.get_sbd_timerange())
 
-        cmd = ["ParselTongue", file_dir + "/parseltongue.py", aipsno, self._ms.projectname,
+        cmd = ["ParselTongue", file_dir + "/parseltongue.py", str(aipsno), self._ms.projectname,
                "--uvfits", f"{self._ms.projectname}.UVFITS" if uvfits is None else uvfits,
                "--target", ','.join(self._ms.sources.targets.names),
                "--fringefinder", ','.join(self._ms.sources.fringe_finders.names),
                "--refant", ','.join(self._ms.refant),
-               "--sbdtime", ','.join(sbd_timerange), "--replace"]
+               "--sbdtime", f"'{','.join([str(t) for t in sbd_timerange])}'", "--replace"]
         if len(self._ms.sources.phase_calibrators) > 0:
             cmd += ["--phaseref", ','.join(self._ms.sources.phase_calibrators.names)]
 
@@ -964,7 +963,6 @@ class Aips(object):
         splits = {}
         for a_src in self._ms.sources.names:
             if Path(f"{self._ms.projectname}.{a_src}.SPLIT.UVFITS").exists():
-
                 splits[a_src] = capi.Project(f"{self._ms.projectname}.{a_src}", cwd=self._ms.cwd,
                                              params=self._ms.params, logger=self._ms._logger)
                 splits[a_src].importdata.import_uvfits(

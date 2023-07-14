@@ -449,7 +449,7 @@ class Project(object):
         finally:
             m.close()
 
-        rprint(f"[green]Total time elapsed: {(time.time()-start_time)/60:.2f} min with {chunks}[/green]")
+        rprint(f"[green]Total time elapsed: {(time.time()-start_time)/60:.2f} min.[/green]")
         for antenna_name in self.antennas.names:
             self.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
             # this is the same as two segments before, but in case one antenna just sent zero data...
@@ -465,7 +465,7 @@ class Project(object):
         m = msmd(str(self.msfile))
         try:
             if not m.open(str(self.msfile)):
-                return ValueError(f"The MS file {self.msfile} could not be openned.")
+                raise ValueError(f"The MS file {self.msfile} could not be openned.")
 
             scannumbers = m.scannumbers()
         finally:
@@ -479,7 +479,7 @@ class Project(object):
         m = msmd(str(self.msfile))
         try:
             if not m.open(str(self.msfile)):
-                return ValueError(f"The MS file {self.msfile} could not be openned.")
+                raise ValueError(f"The MS file {self.msfile} could not be openned.")
 
             antenna_names = m.antennanames()
             return [antenna_names[a] for a in m.antennasforscan(scanno)]

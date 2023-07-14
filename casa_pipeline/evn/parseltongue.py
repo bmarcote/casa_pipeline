@@ -455,7 +455,7 @@ if __name__ == '__main__':
             calsources = args.phaseref.split(',') + args.fringefinder.split(',')
 
         uvfiles = main_calibration(args.aipsid, args.projectname,
-                                   sbd_timerange=[int(i) for i in args.sbdtime.split(',')],
+                                   sbd_timerange=[int(i) for i in args.sbdtime.replace("'", "").split(',')],
                                    refant=args.refant.split(','), calsour=calsources, solint=args.solint,
                                    target=args.target.split(','), bpsour=args.fringefinder.split(','),
                                    phaseref=args.phaseref.split(','),
