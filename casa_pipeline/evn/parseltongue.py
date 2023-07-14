@@ -316,8 +316,10 @@ def main_calibration(aipsid: int, projectname: str,
                      sbd_timerange: list, refant: list, calsour: list, solint: float,
                      target: list, bpsour : list, phaseref: Optional[list] = None,
                      import_uvfits: Optional[str] = None, model: Optional[str] = None,
-                     bchan: int = 0, echan: int = 0):
+                     bchan: int = 0, echan: int = 0, avgchan_split=True):
     """bpsour are the fringe finders and calsour should contain all calibrators
+
+    avgchan_split True/False if all channels within a IF will be averaged or not.
     """
     assert len(projectname) <= 6
     assert (aipsid >= 100) and (aipsid < 100000)
@@ -397,7 +399,7 @@ def main_calibration(aipsid: int, projectname: str,
             uv_src.zap()
 
     split(uvdata, sources=[''], bchan=bchan, echan=echan, gainuse=max_table_no(uvdata, "CL"),
-          doband=1, bpver=max_table_no(uvdata, "BP"), aparm=[2, 0, 0, 1])
+          doband=1, bpver=max_table_no(uvdata, "BP"), aparm=[2 if avgchan_split else 0, 0, 0, 1])
     uvsplits = []
     for a_source in list(set(target + bpsour + calsour)):
         uv_src = AIPSUVData(a_source, "SPLIT", 1, 1)
@@ -433,6 +435,8 @@ if __name__ == '__main__':
     parser.add_argument('--solint', type=float, default=5, help="solint for the global fringe.")
     parser.add_argument('--bchan', type=int, default=0, help="BCHAN parameter for split.")
     parser.add_argument('--echan', type=int, default=0, help="ECHAN parameter for split.")
+    parser.add_argument('--avgchan', default=False, action="store_true",
+                        help="Averages the data when splitting into a single-channel per IF.")
     parser.add_argument('--iono', default=False, action="store_true",
                         help="Runs the ionospheric corrections.")
     parser.add_argument('--replace', default=False, action="store_true",

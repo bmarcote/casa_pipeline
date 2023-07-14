@@ -87,16 +87,17 @@ class Flagging(object):
                            flagbackup=False)
 
 
-    def tfcrop(self, timecutoff=6.0, freqcutoff=5.0, timedevscale=5.0, freqdevscale=5.0):
+    def tfcrop(self, datacolumn='data', field='', flagdimension='freqtime', timecutoff=6.0, freqcutoff=5.0,
+               ntime='scan', combinescans=True, timefit='line', freqfit='poly', extendflags=True, action='apply',
+               flagbackup=True, **kwargs):
         """Runs flagdata with the tfcrop option.
         In principle it should work fine for EVN data as long as the data are already calibrated.
         """
-        return casatasks.flagdata(vis=str(self._ms.msfile), mode='tfcrop', datacolumn='corrected',
-                           field='', ntime='scan', timecutoff=timecutoff, freqcutoff=freqcutoff,
-                           timefit='line', freqfit='line', flagdimension='freqtime',
-                           extendflags=True, timedevscale=timedevscale, freqdevscale=freqdevscale,
-                           extendpols=False, growaround=False,
-                           action='apply', flagbackup=True, overwrite=True, writeflags=True)
+        return casatasks.flagdata(vis=str(self._ms.msfile), mode='tfcrop', datacolumn=datacolumn,
+                           field=field, flagdimension=flagdimension, timecutoff=timecutoff,
+                           freqcutoff=freqcutoff, ntime=ntime, combinescans=combinescans,
+                           timefit=timefit, freqfit=freqfit, extendflags=extendflags, action=action,
+                           flagbackup=flagbackup, **kwargs)
 
 
     def aoflagger(self, strategy_file: str = None):

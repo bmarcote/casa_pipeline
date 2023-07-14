@@ -942,7 +942,8 @@ class Aips(object):
         return f"{self._ms.projectname}.UVFITS"
 
 
-    def main_calibration(self, aipsno: Optional[int] = None, uvfits: Optional[str] = None):
+    def main_calibration(self, aipsno: Optional[int] = None, uvfits: Optional[str] = None,
+                         avgchan: bool = True):
         aipsno = self.aipsno_from_project() if aipsno is None else aipsno
         file_dir = os.path.dirname(os.path.realpath(__file__))
         sbd_timerange = self.converttime2aips(self._ms.calibrate.get_sbd_timerange())
@@ -955,6 +956,9 @@ class Aips(object):
                "--sbdtime", ','.join([str(t) for t in sbd_timerange]), "--replace"]
         if len(self._ms.sources.phase_calibrators) > 0:
             cmd += ["--phaseref", ','.join(self._ms.sources.phase_calibrators.names)]
+
+        if avgchan:
+            cmd += ["--avgchan"]
 
         rprint(f"\n[bold]{' '.join(cmd)}[/bold]")
         result = subprocess.run(cmd, shell=False, stdout=None, stderr=subprocess.STDOUT)

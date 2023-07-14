@@ -105,10 +105,13 @@ class Plotting(object):
         cmap = plt.get_cmap("tab10")
         for s,a_src in enumerate(self._ms.sources.names):
             src_scans = self._ms.scans_with_source(a_src)
-            for a,ant in enumerate(self._ms.antennas.names):
-                x = self._ms.times_for_scans(np.intersect1d(ants_scans[ant], src_scans))
-                t = (dt.datetime(1858, 11, 17, 0, 0, 2) + x*dt.timedelta(seconds=1))
-                ax.scatter(x=t, y=np.ones_like(t)*a, s=1, color=cmap(s), rasterized=True, label=a_src)
+            if len(src_scans) > 0:
+                for a,ant in enumerate(self._ms.antennas.names):
+                    if len(ants_scans[ant]) > 0:
+                        x = self._ms.times_for_scans(np.intersect1d(ants_scans[ant], src_scans))
+                        t = (dt.datetime(1858, 11, 17, 0, 0, 2) + x*dt.timedelta(seconds=1))
+                        ax.scatter(x=t, y=np.ones_like(t)*a, s=1, color=cmap(s), rasterized=True,
+                                   label=a_src if a == 0 else None)
 
 
         ax.set_xlabel(r'Time (UTC)')

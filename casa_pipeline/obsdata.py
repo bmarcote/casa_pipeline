@@ -637,19 +637,23 @@ class Importing(object):
         params += ["-t45", "-l1", "-r", "-nd", "archive.jive.nl/exp/" \
                    f"{expname.upper()}_{obsdate}/fits -A '{expname.lower()}*'"]
 
-        capi.tools.shell_command("wget", params)
-        capi.tools.shell_command("md5sum", ["-c", f"{expname.lower()}.checksum"])
-        # TODO: verify here that all files are OK!
-        capi.tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
-                                     f"pipe/{expname.lower()}.antab.gz"])
-        capi.tools.shell_command("gunzip", [f"{expname.lower()}.antab.gz"])
-        # TODO: if ERROR 404: Not Found, then go for the _1, _2,...
-        capi.tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
-                                     f"pipe/{expname.lower()}.uvflg"])
-        # TODO: this only if I need AIPS
-        capi.tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
-                                     f"pipe/{expname.lower()}.tasav.FITS.gz"])
-        capi.tools.shell_command("gunzip", [f"{expname.lower()}.tasav.FITS.gz"])
+        try:
+            capi.tools.shell_command("wget", params)
+            capi.tools.shell_command("md5sum", ["-c", f"{expname.lower()}.checksum"])
+            # TODO: verify here that all files are OK!
+            capi.tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
+                                         f"pipe/{expname.lower()}.antab.gz"])
+            capi.tools.shell_command("gunzip", [f"{expname.lower()}.antab.gz"])
+            # TODO: if ERROR 404: Not Found, then go for the _1, _2,...
+            capi.tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
+                                         f"pipe/{expname.lower()}.uvflg"])
+            # TODO: this only if I need AIPS
+            capi.tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
+                                         f"pipe/{expname.lower()}.tasav.FITS.gz"])
+            capi.tools.shell_command("gunzip", [f"{expname.lower()}.tasav.FITS.gz"])
+        except ValueError as err:
+            rprint(f"[bold red]ERROR: likely you require credentials to download these data[/bold red]")
+            rprint(f"[red]{err}[/red]")
 
 
     def get_obsdate_from_fitsidi(self):

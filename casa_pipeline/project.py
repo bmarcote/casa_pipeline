@@ -539,6 +539,9 @@ class Project(object):
     def times_for_scans(self, scanno: list) -> list:
         """Returns the time for the specified scan number.
         """
+        if len(scanno) == 0:
+            raise ValueError("There should be at least one scan to check in the list.")
+
         m = msmd(str(self.msfile))
         try:
             if not m.open(str(self.msfile)):
@@ -568,7 +571,7 @@ class Project(object):
 
 
     def split(self, sources: Optional[Union[Iterable[str], str, None]] = None,
-              keepflags=False, chanbin: int =-1, **kwargs):
+              keepflags=False, chanbin: int =-1, inplace=False, **kwargs):
         """Splits all the data from all calibrated sources.
         If sources is None, then all sources will be split.
 
@@ -577,6 +580,9 @@ class Project(object):
               Width (bin) of input channels to average to for an output channel.
               If -1, then if will create a single-output channel per spw.
               A value of 0 or 1 will not do any averaging.
+            - inplace : bool  (default False)
+              In case one wants this to be the new MS associated to the current project,
+              instead of creating a new one.
 
         It returns a dict with all split source names as keys. The values are the new Ms objects.
         """
@@ -601,26 +607,36 @@ class Project(object):
             kwargs['chanaverage'] = True
             kwargs['chanbin'] = self.freqsetup.channels
 
-        suffix = 1
-        while any([os.path.isdir(f"{self.projectname}.{a_source}" \
-                   f"{'' if suffix == 1 else '.'+str(suffix)}.ms") for a_source in sources]):
-            suffix += 1
+        if inplace:
+            suffix = 1
+            while os.path.isdir(f"{self.projectname}{'' if suffix == 1 else '.'+str(suffix)}.ms"):
+                suffix += 1
 
-        for a_source in sources:
-            np.int = int
-            np.float = float  # these two is because CASA uses deprecated types in newer numpy ver!
-            try:
-                ms_name = f"{self.projectname}.{a_source}" \
-                          f"{'' if suffix == 1 else '.'+str(suffix)}.ms"
-                casatasks.mstransform(vis=str(self.msfile), outputvis=ms_name,
-                                      field=a_source, keepflags=keepflags, **kwargs)
-                splits[a_source] = Project(ms_name.replace('.ms', ''), cwd=self.cwd,
-                                      params=self.params, logger=self._logger)
-                self.splits[a_source].append(splits[a_source])
-            except: #TODO: which error is when it does not find a source?
-                rprint(f"[bold red]Could not create a split MS file for {a_source}.[/bold red]")
+            ms_name = f"{self.projectname}{'' if suffix == 1 else '.'+str(suffix)}.ms"
+            casatasks.mstransform(vis=str(self.msfile), outputvis=ms_name,
+                                  keepflags=keepflags, **kwargs)
+            self._msfile = Path(ms_name)
+        else:
+            suffix = 1
+            while any([os.path.isdir(f"{self.projectname}.{a_source}" \
+                       f"{'' if suffix == 1 else '.'+str(suffix)}.ms") for a_source in sources]):
+                suffix += 1
 
-        return splits
+            for a_source in sources:
+                np.int = int
+                np.float = float  # these two is because CASA uses deprecated types in newer numpy ver!
+                try:
+                    ms_name = f"{self.projectname}.{a_source}" \
+                              f"{'' if suffix == 1 else '.'+str(suffix)}.ms"
+                    casatasks.mstransform(vis=str(self.msfile), outputvis=ms_name,
+                                          field=a_source, keepflags=keepflags, **kwargs)
+                    splits[a_source] = Project(ms_name.replace('.ms', ''), cwd=self.cwd,
+                                          params=self.params, logger=self._logger)
+                    self.splits[a_source].append(splits[a_source])
+                except: #TODO: which error is when it does not find a source?
+                    rprint(f"[bold red]Could not create a split MS file for {a_source}.[/bold red]")
+
+            return splits
 
 
     def export_uvfits(self, outfitsfilename: Union[str, None] = None, overwrite=True,
