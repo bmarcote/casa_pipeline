@@ -223,11 +223,15 @@ class Project(object):
 
 
         if sci_package.upper().strip() not in _SCI_PACKAGE:
-            ValueError(f"The sci_package {sci_package} is not known. " \
+            raise ValueError(f"The sci_package {sci_package} is not known. " \
                        f"Only {', '.join(_SCI_PACKAGE)} are available.")
 
         self._scipackage = sci_package
         self.logger.debug(f"The package {sci_package} will be used for data reduction.")
+        if (self._scipackage == 'AIPS') and (not capi.tools.aips_exists()):
+            rprint(f"\n[bold red]AIPS is set to be used, but not AIPS environment is found[/bold red]")
+            rprint(f"[red]Did you run the AIPS LOGIN.SH (or CSH) script?[/red]")
+            raise OSError("No AIPS environment is found but AIPS will be used.")
 
         if cwd is None:
             self._cwd = Path('./')
@@ -236,7 +240,7 @@ class Project(object):
         elif isinstance(cwd, Path):
             self._cwd = cwd
         else:
-            TypeError(f"The working directory ({cwd}) should be either None, Path or str.")
+            raise TypeError(f"The working directory ({cwd}) should be either None, Path or str.")
 
         if params is not None:
             if isinstance(params, dict):
@@ -563,6 +567,36 @@ class Project(object):
             return m.timesforscan(scanno)
         finally:
             m.close()
+
+    def best_scan_from_source(self, source_name: str, verbose: bool = True):
+        """Returns the scan from the given source where more antennas participated.
+        """
+        #TODO: in a future iteraction, do statistics on the data to also determine which one
+        # has a lower dispersion (thus no RFI, constant amp/[phase?]...
+        scans = self.scans_with_source(source_name)
+        ants = self.antennas_in_scans(scans)
+        max_ants = -1
+        best_scan = {}
+        for scan,ant in zip(scans, ants):
+            if len(ant) >= max_ants:
+                best_scan[scan] = ant
+                max_ants = len(ant)
+
+        if len(best_scan) == 1:
+            if verbose:
+                rprint(f"\n[bold]The scan {best_scan.keys()[0]} is the best one as " \
+                       f"{max_ants} antennas observed it.[/bold]\n")
+
+            return best_scan.keys()[0]
+        elif len(best_scan) > 1:
+            if verbose:
+                rprint(f"\n[bold]The scans {', '.join(best_scan.keys())} are the best one as " \
+                       f"{max_ants} antennas observed it.[/bold]\n")
+            return best_scan.keys()
+        else:
+            rprint("[yellow]No scan found for the given source.[/yellow]")
+            return None
+
 
 
     def listobs(self, listfile: Union[Path, str] = None, overwrite=True) -> dict:

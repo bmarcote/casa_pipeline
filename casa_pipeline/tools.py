@@ -1,8 +1,11 @@
+import os
 import sys
 import subprocess
 import datetime
+from pathlib import Path
 from typing import Iterable, Union, Optional, Tuple
-
+from astropy.io import fits
+from astropy import units as u
 
 def chunkert(counter: int, max_length: int, increment: int) -> Tuple[int, int]:
     """Silly function to select a subset of an interval in
@@ -77,3 +80,26 @@ def date2mjd(date: datetime.datetime) -> float:
     """
     origin = datetime.datetime(1858, 11, 17)
     return  (date-origin).days + (date-origin).seconds/86400.0
+
+def fix_difmap_image(fitsimage: Union[str,Path]):
+    """When using Difmap 'select pi', the stokes parameter in the stored FITS image
+    is unexpected for both AIPS and CASA. This script fixes the metadata in the file
+    """
+    with fits.open(fitsimage, mode='update') as ffile:
+        if -8.9999 < ffile[0].header['CRVAL4'] < -9.00001:
+            ffile[0].header['CRVAL4'] = 1.0000000000000
+
+        ffile.flush()
+
+def space_available(path: Union[str, Path]) -> u.Quantity:
+    """Returns the available space in the disk where the given path is located.
+    """
+    results = os.statvfs(path)
+    return (results.f_frsize*results.f_bavail*u.b).to(u.Gb)
+
+def aips_exists() -> bool:
+    """Checks in the AIPS environment is loaded in the system.
+    """
+    return subprocess.run("which aips", shell=True, capture_output=True).returncode == 0
+
+

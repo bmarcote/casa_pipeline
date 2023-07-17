@@ -17,6 +17,7 @@ from casatools import componentlist as cl
 from casatools import table as tb
 import casa_pipeline as capi
 
+_FILE_DIR = os.path.dirname(os.path.realpath(__file__))
 """Diferent functions that can be used directly from this module in order to calibrate the data.
 Later on a class Calibration is defined, which will use these functions but by using the
 obsdata/Ms objects.
@@ -799,7 +800,8 @@ class Calibration(object):
             component_coordinate = map_center.directional_offset_by(angle, offset)
             print('Component coordinate + ' + component_coordinate.to_string('hmsdms'))
             component_flux = float(component[0])
-            cl.addcomponent(dir='J2000 ' + map_center.to_string('hmsdms'), flux=component_flux, fluxunit='Jy', shape='point')
+            cl.addcomponent(dir='J2000 ' + map_center.to_string('hmsdms'), flux=component_flux,
+                            fluxunit='Jy', shape='point')
 
         for component in gaussian_components:
             offset = float(component[1]) / 1000. / 60. / 60. * u.deg
@@ -811,9 +813,9 @@ class Calibration(object):
             component_coordinate = map_center.directional_offset_by(angle, offset)
             print('Component coordinate ' +  component_coordinate.to_string('hmsdms'))
             component_flux = float(component[0])
-            cl.addcomponent(dir='J2000 ' + map_center.to_string('hmsdms'), flux=component_flux, fluxunit='Jy',
-                            shape='Gaussian', majoraxis=f"{bmaj}arcsec", minoraxis=f"{bmin}arcsec",
-                            positionangle=f"{ang}deg")
+            cl.addcomponent(dir='J2000 ' + map_center.to_string('hmsdms'), flux=component_flux,
+                            fluxunit='Jy', shape='Gaussian', majoraxis=f"{bmaj}arcsec",
+                            minoraxis=f"{bmin}arcsec", positionangle=f"{ang}deg")
 
         cl.rename(outfile)
         cl.close()
@@ -912,8 +914,7 @@ class Aips(object):
     def a_priori_calibration(self, aipsno: Optional[int] = None,
                              aips_fitsidifile: Optional[str] = None):
         aipsno = self.aipsno_from_project() if aipsno is None else aipsno
-        file_dir = os.path.dirname(os.path.realpath(__file__))
-        cmd = ["ParselTongue", file_dir + "/parseltongue.py", str(aipsno), self._ms.projectname,
+        cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", str(aipsno), self._ms.projectname,
                "-i", "--replace", "--fits",
                f"{self._ms.projectname}_1_1.IDI" if aips_fitsidifile is None else aips_fitsidifile
                ]
@@ -945,10 +946,9 @@ class Aips(object):
     def main_calibration(self, aipsno: Optional[int] = None, uvfits: Optional[str] = None,
                          avgchan: bool = True):
         aipsno = self.aipsno_from_project() if aipsno is None else aipsno
-        file_dir = os.path.dirname(os.path.realpath(__file__))
         sbd_timerange = self.converttime2aips(self._ms.calibrate.get_sbd_timerange())
 
-        cmd = ["ParselTongue", file_dir + "/parseltongue.py", str(aipsno), self._ms.projectname,
+        cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", str(aipsno), self._ms.projectname,
                "--uvfits", f"{self._ms.projectname}.UVFITS" if uvfits is None else uvfits,
                "--target", ','.join(self._ms.sources.targets.names),
                "--fringefinder", ','.join(self._ms.sources.fringe_finders.names),
@@ -974,6 +974,21 @@ class Aips(object):
                 self._ms.splits[a_src].append(splits[a_src])
 
         return splits
+
+
+    def selfcal_with_difmapimage(self, fitsimage: str, aipsno: Optional[int] = None):
+        """Imports a FITS image into AIPS.
+        """
+        fitsimage = Path(fitsimage)
+        aipsno = self.aipsno_from_project() if aipsno is None else aipsno
+        if not fitsimage.exists():
+            raise FileNotFoundError(f"The file {fitsimage} cannot be found.")
+
+        capi.tools.fix_difmap_image(fitsimage)
+        cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", str(aipsno), self._ms.projectname,
+               ]
+
+
 
 
     def __init__(self, ms: capi.Project):

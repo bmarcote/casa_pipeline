@@ -16,6 +16,9 @@ class Jplotter(object):
     """
     def __init__(self, ms: capi.Project):
         self._ms = ms
+        if self._ms.msfile.exists():
+            self.open_ms()
+
 
     def open_ms(self):
         yield f"ms {str(self._ms.msfile)}"
@@ -63,6 +66,7 @@ class Casaplot(object):
 
     def casa_tsys(self):
         pass
+
 
 
 class Plotting(object):
@@ -127,7 +131,22 @@ class Plotting(object):
 
         plt.close()
 
+    def dynamic_range(self,  xaxis: str = 'time', yaxis: str = 'freq', zaxis: str = 'amp',
+                      outfile: Optional[str] = None):
+        """Creates a plot with the specified (x,y) axis, and with color the z axis.
+        This
 
+        Inputs
+        ------
+            - xaxis : str  (default = 'time')
+                Variable to plot in the _x_ axis. Allowed values are 'time', 'uvdist', 'antenna'.
+            - yaxis : str  (default = 'freq')
+                Variable to plot in the _y_ axis. Allowed values are 'freq' or 'time'.
+            - zaxis : str  (default = 'amp')
+                Variable to use for the color scale of the plotted data. Allowed values are 'amp' or 'phase'.
+
+        """
+        pass
 
 
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import glob
 import shutil
+import subprocess
 import datetime as dt
 import numpy as np
 from enum import IntEnum
@@ -736,6 +737,13 @@ class Importing(object):
         for a_fitsidi in fitsidifiles:
             if not os.path.isfile(a_fitsidi):
                 raise FileNotFoundError(f"The file {a_fitsidi} could not be found.")
+
+        if capi.tools.space_available(self._ms.cwd) <= 1.55*3*u.kbit*int(subprocess.run(
+                                                       f"du -sc {' '.join(fitsidifiles)}", shell=True,
+                                                       capture_output=True).stdout.decode().split()[-2]):
+            rprint("\n\n[bold red]There is no enough space in the computer to create " \
+                   "the MS file and perform the data reduction[/bold red]")
+            raise IOError("Not enough disk space to create the MS file.")
 
         antabfile = self._ms.cwd / Path(f"{self._ms.projectname.lower()}.antab")
         uvflgfile = self._ms.cwd / Path(f"{self._ms.projectname.lower()}.uvflg")

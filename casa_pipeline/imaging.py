@@ -10,14 +10,16 @@ class Imaging(object):
     def tclean(self):
         pass
 
-    def wsclean(self, params=None):
-        if params is None:
-            capi.tools.shell_command("wsclean", [str(self._ms.msfile)])
+    def wsclean(self, parameters: str = None):
+        if parameters is None:
+            capi.tools.shell_command("wsclean", [self._ms.params['imaging']['wsclean'].split(' '),
+                                                 str(self._ms.msfile)])
         else:
-            if isinstance(params, str):
-                capi.tools.shell_command("wsclean", [*params.split(' '), str(self._ms.msfile)])
-            elif isinstance(params, list):
-                capi.tools.shell_command("wsclean", [*params, str(self._ms.msfile)])
-            else:
-                raise TypeError(f"The parameters for WSClean ({params}) are neither a str or a list.")
+            capi.tools.shell_command("wsclean", [parameters.split(' '), str(self._ms.msfile)])
+
+    def import_difmap(self, fitsfile = str):
+        """Imports a Difmap image to CASA format
+        It will first fix the FITS image if the metadata is unexpected (as for stokes)
+        """
+        pass
 
