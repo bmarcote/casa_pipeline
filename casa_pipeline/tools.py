@@ -88,8 +88,7 @@ def fix_difmap_image(fitsimage: Union[str,Path]):
     with fits.open(fitsimage, mode='update') as ffile:
         if -8.9999 < ffile[0].header['CRVAL4'] < -9.00001:
             ffile[0].header['CRVAL4'] = 1.0000000000000
-
-        ffile.flush()
+            ffile.flush()
 
 def space_available(path: Union[str, Path]) -> u.Quantity:
     """Returns the available space in the disk where the given path is located.
