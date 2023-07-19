@@ -81,14 +81,19 @@ def date2mjd(date: datetime.datetime) -> float:
     origin = datetime.datetime(1858, 11, 17)
     return  (date-origin).days + (date-origin).seconds/86400.0
 
-def fix_difmap_image(fitsimage: Union[str,Path]):
+def fix_difmap_image(fitsimage: Union[str,Path], output_verify='ignore'):
     """When using Difmap 'select pi', the stokes parameter in the stored FITS image
     is unexpected for both AIPS and CASA. This script fixes the metadata in the file
     """
-    with fits.open(fitsimage, mode='update') as ffile:
-        if -8.9999 < ffile[0].header['CRVAL4'] < -9.00001:
-            ffile[0].header['CRVAL4'] = 1.0000000000000
-            ffile.flush()
+    try:
+        with fits.open(fitsimage, mode='update') as ffile:
+            if 'CRVAL4' in ffile[0].header:
+                if -9.0001 < ffile[0].header['CRVAL4'] < -8.999:
+                    ffile[0].header['CRVAL4'] = 1.0
+                    ffile.flush(output_verify=output_verify)
+    except fits.VerifyError as e:
+        print(f"WARNING: VerifyWarning: {e}")
+        print("Continuing from here...")
 
 def space_available(path: Union[str, Path]) -> u.Quantity:
     """Returns the available space in the disk where the given path is located.

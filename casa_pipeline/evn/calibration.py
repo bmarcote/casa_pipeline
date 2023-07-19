@@ -14,7 +14,6 @@ from casatasks.private import tec_maps
 from casatools import table as tb
 from casatools import componentlist as cl
 # from casatools import msmetadata as msmd
-from casatools import table as tb
 import casa_pipeline as capi
 
 _FILE_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -514,7 +513,8 @@ class Calibration(object):
         return sorted_antenna_list
 
 
-    def main_calibration(self, replace=False, fixed_fringe_callib=False, dispersive=False, parang=True):
+    def main_calibration(self, replace=False, fixed_fringe_callib=False, dispersive=False,
+                         parang=True):
         """Runs the main calibration of the data:
         - instrumental delay corrections: in the specified time range.
         - global fringe fit: on all calibrators (and target if no phase-referencing is used).
@@ -538,15 +538,17 @@ class Calibration(object):
             # TODO: this is a patch because currently fringe-fit breaks with callib.... :-(
             if fixed_fringe_callib:
                 casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
-                                    timerange=self.get_sbd_timerange(),
-                                    solint='inf', zerorates=True, paramactive=[True, True, dispersive],
-                                    refant=','.join(self.prioritize_ref_antennas()), minsnr=5, # TODO: put back to 50
-                                    docallib=True, delaywindow=[-200, 200], ratewindow=[-5e-8, 5e-8],
-                                    callib=str(self.callib.filename), corrdepflags=True, parang=parang)
+                                    timerange=self.get_sbd_timerange(), solint='inf',
+                                    zerorates=True, paramactive=[True, True, dispersive],
+                                    refant=','.join(self.prioritize_ref_antennas()), minsnr=50,
+                                    docallib=True, delaywindow=[-200, 200],
+                                    ratewindow=[-5e-8, 5e-8], callib=str(self.callib.filename),
+                                    corrdepflags=True, parang=parang)
             else:
                 casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['sbd']),
                                     timerange=self.get_sbd_timerange(),
-                                    solint='inf', zerorates=True, paramactive=[True, True, dispersive],
+                                    solint='inf', zerorates=True,
+                                    paramactive=[True, True, dispersive],
                                     refant=','.join(self.prioritize_ref_antennas()), minsnr=5,
                                     gaintable=self.callib.gaintables(),
                                     delaywindow=[-200, 200], ratewindow=[-5e-8, 5e-8],
@@ -568,19 +570,23 @@ class Calibration(object):
             if fixed_fringe_callib:
                 casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['mbd']),
                                     field=','.join(self._ms.sources.all_calibrators.names),
-                                    solint='inf', zerorates=False, paramactive=[True, True, dispersive],
+                                    solint='inf', zerorates=False,
+                                    paramactive=[True, True, dispersive],
                                     delaywindow=[-200, 200], ratewindow=[-5e-8, 5e-8],
                                     refant=','.join(self.prioritize_ref_antennas()), combine='spw',
-                                    minsnr=3, gaintable=self.callib.gaintables(), #weightfactor=1, TODO
-                                    docallib=True,
-                                    callib=str(self.callib.filename), corrdepflags=True, parang=parang)
+                                    minsnr=3, gaintable=self.callib.gaintables(),
+                                    #weightfactor=1, TODO
+                                    docallib=True, callib=str(self.callib.filename),
+                                    corrdepflags=True, parang=parang)
             else:
                 casatasks.fringefit(vis=str(self._ms.msfile), caltable=str(cals['mbd']),
                                     field=','.join(self._ms.sources.all_calibrators.names),
-                                    solint='inf', zerorates=False, paramactive=[True, True, dispersive],
+                                    solint='inf', zerorates=False,
+                                    paramactive=[True, True, dispersive],
                                     delaywindow=[-200, 200], ratewindow=[-5e-8, 5e-8],
                                     refant=','.join(self.prioritize_ref_antennas()), combine='spw',
-                                    minsnr=3, gaintable=self.callib.gaintables(), #weightfactor=1, TODO
+                                    minsnr=3, gaintable=self.callib.gaintables(),
+                                    #weightfactor=1, TODO
                                     interp=self.callib.interps(), corrdepflags=True,
                                     spwmap=self.callib.spwmaps(), parang=parang)
 
@@ -724,8 +730,8 @@ class Calibration(object):
                            bandtype=bandtype, smodel=smodel, corrdepflags=corrdepflags,
                            append=append, fillgaps=fillgaps, degamp=degamp, degphase=degphase,
                            visnorm=visnorm, maskcenter=maskcenter, maskedge=maskedge,
-                           docallib=docallib, callib=callib, gaintable=gaintable, gainfield=gainfield,
-                           interp=interp, spwmap=spwmap, parang=parang)
+                           docallib=docallib, callib=callib, gaintable=gaintable,
+                           gainfield=gainfield, interp=interp, spwmap=spwmap, parang=parang)
         # TODO: add to the callib
         # self.callib.new_entry(name=f"bandpass{str(bpver) if bpver > 1 else ''}",
         #                       caltable=str(calbp),
@@ -758,7 +764,8 @@ class Calibration(object):
 
 
     def create_cl_file(self, difmap_mod_file: str, outfile: str = 'component_list.cl'):
-        """Creates a CASA-compatible file containing the component list of a given model created from Difmap.
+        """Creates a CASA-compatible file containing the component list of
+        a given model created from Difmap.
         Code firsly done by Joe Bright during its visit to JIVE in 2022.
 
         Parameters
@@ -778,7 +785,7 @@ class Calibration(object):
 
             for line in mylines:
                 if line.startswith('! Center'):
-                    ra, dec = [l.split(':')[1] for l in line.split(',')]
+                    ra, dec = [a_line.split(':')[1] for a_line in line.split(',')]
                     ra = "{}h{}m{}s".format(*ra.split())
                     dec = "{}d{}m{}s".format(*(dec.split('(')[0][:-1]).split())
                     map_center = SkyCoord(ra, dec, frame='icrs')
@@ -824,17 +831,21 @@ class Calibration(object):
 
     # def self_calibration(project: obsdata.Project, source_model: str, calmode: str, solint: int):
     #     raise NotImplementedError
-    #     # Maybe just a function that calls in loop all expected iteractions: p, p, p, a&p, p, a&p, p
-    #     # In the amplitude selfcal (not the gscale with combine scan), use solnorm=True so it only corrects for
-    #     # time-dependent gain residuals, not the flux scale.
+    #     # Maybe just a function that calls in loop all expected iteractions:
+    #     #  p, p, p, a&p, p, a&p, p
+    #     # In the amplitude selfcal (not the gscale with combine scan), use solnorm=True so it
+    #     # only corrects for time-dependent gain residuals, not the flux scale.
     #
     #     # First, let's refine the delays
-    #     gaincal(vis='tl016b_cal1.ms', field='J1154+6022', caltable='tl016b_cal1.dcal', solint='inf', refant=project.refants, minblperant=3, gaintype='K', calmode=calmode, parang=False)
+    #     gaincal(vis='tl016b_cal1.ms', field='J1154+6022', caltable='tl016b_cal1.dcal',
+    #     solint='inf', refant=project.refants, minblperant=3, gaintype='K', calmode=calmode,
+    #     parang=False)
 
 
 # NOTE: for selfcal phase-only, use solnorm=False. but for A&P, solnorm=True. And parang=False?
 
-# gaincal(vis='obj_selfcal.ms', caltable='selfcal_amplitude.tb', solint='48s', refant='ea24', calmode='ap', solnorm=True, normtype='median', gaintype='T', minsnr=6)
+# gaincal(vis='obj_selfcal.ms', caltable='selfcal_amplitude.tb', solint='48s', refant='ea24',
+# calmode='ap', solnorm=True, normtype='median', gaintype='T', minsnr=6)
 #
 # applycal(vis='obj_selfcal.ms', gaintable='selfcal_amplitude.tb')
 
@@ -843,7 +854,6 @@ class Calibration(object):
     #     """
     #     Project needs to contain the difmap associated images!!!!!!!!!!!
     #
-    #     Note that Difmap FITS images exhibit a scale that is missunderstood by CASA by a factor 1000.
     #     This task automatically corrects for it when importing the model in the MS file.
     #     """
     #     raise NotImplementedError
@@ -852,10 +862,11 @@ class Calibration(object):
     #         calsc = project.caldir / f"{project.project_name.lower()}.{a_cal}.sc_final"
     #         # TODO: check if ft is in casatools or casatasks
     #         # NOT IN MSFILE BUT IN SPLIT FILES
-    #         casatools.ft(vis=str(project.msfile), field=a_cal, model=str(src_model), usescratch=True)
-    #         # Here open the MS, getcol MODEL_XX  divide all complex numbers by 1000 and load it again.
-    #         casatasks.gaincal(vis=str(project.msfile), caltable=str(calsc), field=a_cal, solint='3min',
-    #                           parang=True)
+    #         casatools.ft(vis=str(project.msfile), field=a_cal, model=str(src_model),
+    #                      usescratch=True)
+    #         # Here open the MS, getcol MODEL  divide all complex numbers by 1000 and load it again
+    #         casatasks.gaincal(vis=str(project.msfile), caltable=str(calsc), field=a_cal,
+    #                           solint='3min', parang=True)
     #         casatasks.applycal()
     #
 
@@ -968,7 +979,8 @@ class Aips(object):
         for a_src in self._ms.sources.names:
             if Path(f"{self._ms.projectname}.{a_src}.SPLIT.UVFITS").exists():
                 splits[a_src] = capi.Project(f"{self._ms.projectname}.{a_src}", cwd=self._ms.cwd,
-                                             params=self._ms.params, logging_level=self._ms._logging_level)
+                                             params=self._ms.params,
+                                             logging_level=self._ms._logging_level)
                 splits[a_src].importdata.import_uvfits(
                         uvfitsfile=f"{self._ms.projectname}.{a_src}.SPLIT.UVFITS", delete=True)
                 self._ms.splits[a_src].append(splits[a_src])
@@ -986,17 +998,18 @@ class Aips(object):
 
         capi.tools.fix_difmap_image(fitsimage)
         cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", str(aipsno), self._ms.projectname,
-               ]
+               "--selfcal", str(fitsimage), "--target", ','.join(self._ms.sources.targets.names),
+               "--fringefinder", ','.join(self._ms.sources.fringe_finders.names),
+               "--refant", ','.join(self._ms.refant)]
+        if len(self._ms.sources.phase_calibrators) > 0:
+            cmd += ["--phaseref", ','.join(self._ms.sources.phase_calibrators.names)]
+
+        rprint(f"\n[bold]{' '.join(cmd)}[/bold]")
+        result = subprocess.run(cmd, shell=False, stdout=None, stderr=subprocess.STDOUT)
+        result.check_returncode()
 
 
 
 
     def __init__(self, ms: capi.Project):
         self._ms = ms
-
-
-
-
-
-
-
