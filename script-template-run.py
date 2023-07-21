@@ -1,42 +1,48 @@
+import sys
 import glob
 import logging
+from rich import print as rprint
 import casa_pipeline as capi
 # from importlib import reload
 
-params = {'projectcode': 'rg013a',
-          'obsdate': '221016',
-          'password': '80f5fab7fcff',
-          # 'target': ['GRB221009A'],
-          # 'phaseref': ['J1908+2028', 'J1905+1943'],
-          'phaseref': ['GRB221009A'],
-          'target': ['J1908+2028', 'J1905+1943'],
-          'fringefinder': ['J1800+3848', 'J1925+2106'],
-          'reference_antenna': ['T6', 'MC'],  # can be a list of antennas too
-          # 'calibration': {'sbd_timerange': '10:01:30~10:03:30'}}
-          'calibration': {'sbd_timerange': '2022/10/16/12:00:00~2022/10/16/12:03:00'}}
+params = {'projectname': 'ek051c',
+          'obsdate': '220817',
+          'sci_package': 'AIPS',
+          'password': 'RQxHE91GWrMI',
+          'sources': {'target': ['R190520_D', 'J1603-1007'],
+                      'phaseref': ['J1605-1139'],
+                      'fringefinder': ['J1642-0621', 'J1927+6117']},
+          'reference_antenna': ['EF', 'TR'],  # can be a list of antennas too
+          'calibration': {'sbd_timerange': '2022/08/17/19:31:30~2022/08/17/19:33:00',
+                          'do_ionospheric': True}}
 
 
-obs = capi.Project(params['projectcode'], params=params, logging_level=logging.DEBUG)
+obs = capi.Project(params['projectname'], params=params, logging_level=logging.DEBUG,
+                   sci_package=params['sci_package'])
 
 # Importing FITS-IDI
-if not obs.ms.msfile.exists():
-    if len(glob.glob(f"{params['projectcode']}_1_1.IDI*")) == 0:
-        obs.importdata.evn_download(obsdate=params['obsdate'], username=params['projectcode'].lower(),
-                                    password=params['password'])
+if len(glob.glob(f"{obs.projectname}_1_1.IDI*")) == 0:
+    obs.importdata.evn_download(obsdate=params['obsdate'], username=params['projectname'].lower(),
+                                password=params['password'])
 
-    obs.importdata.evn_fitsidi(f"{params['projectcode']}_1_1.IDI*", delete=False)
+if not obs.msfile.exists():
+    if obs.sci_package == 'AIPS':
+        uvfits = obs.calibrate.aips.a_priori_calibration()
+        obs.importdata.import_uvfits(uvfitsfile=uvfits, delete=True)
+    else:
+        obs.importdata.evn_fitsidi(f"{obs.projectname}_1_1.IDI*", delete=False)
 else:
-    # obs.calibrate.clearcal()
-    obs.calibrate.callib.remove_entry('all')
-    # obs.flag.flagdata(mode='unflag')
-    pass
+    obs.flag.flagdata(mode='unflag')
+    if not obs.sci_package == 'AIPS':
+        obs.calibrate.clearcal()
+        obs.calibrate.callib.remove_entry('all')
+        obs.flag.apply_flags_from_file()
+        obs.flag.flagdata(autocorr=True)
 
-# Manual config (should be in the params auto)
-# obs.ms.refant = params['reference_antenna']
+
 obs.store()
 
-
-# Params to check
+# params to check
 # obs.ms.sources
 # obs.ms.sources.targets
 # obs.ms.sources.fringe_finders
@@ -44,46 +50,67 @@ obs.store()
 # obs.ms.antennas.observed
 # obs.ms.timerange
 # obs.ms.freqsetup
-obs.summary(outfile=f"results/summary-{obs.projectname}.txt")
+obs.summary(outfile=f"summary-{obs.projectname}.txt")
+
+# obs.plot.tplot()
 
 
-# Initial flagging
-# obs.flag.apply_flags_from_file()
-# obs.flag.edge_channels(0.05)  # 0.1 (10% edges) by default
-# obs.flag.quack("WB", 4.0)  # 4 s on WB data
-# obs.flag.quack("SR", 4.0)  # 4 s on WB data
-# obs.flag.aoflagger()
-
-# Initial calibration
-obs.calibrate.a_priori_calibration()
-
-# ACCOR, ACSCL.
-# obs.calibrate.accor()
-
-# obs.calibrate.ionospheric_corrections()
-# obs.calibrate.main_calibration(fixed_fringe_callib=False, dispersive=True)
-obs.calibrate.main_calibration(fixed_fringe_callib=False, dispersive=False)
-obs.store()
-obs.calibrate.apply_calibration()
-
+# initial flagging
+obs.flag.edge_channels(0.05)  # 0.1 (10% edges) by default
+# obs.flag.quack("wb", 10.0)  # 10 s on wb data
+obs.flag.aoflagger()
 obs.flag.tfcrop()
 
+
 splits = []
-splits.append(obs.ms.split(sources=obs.sources.phase_calibrators.names + obs.sources.targets.names))
-# by default sources=obs.sources.names
+if obs.sci_package == 'AIPS':
+    obs.export_uvfits(outfitsfilename=f"{obs.projectname}.2.uvfits", overwrite=True)
+    splits.append(obs.calibrate.aips.main_calibration(uvfits=f"{obs.projectname}.2.uvfits", avgchan=False))
 
-for src in obs.sources.phase_calibrators.names + obs.sources.targets.names:
-    splits[-1][src].export_uvfits()
+    for a_src in splits[-1]:
+        splits[-1][a_src].flag.aoflagger()
+        splits[-1][a_src].flag.tfcrop(ntime='30min')
+        # todo: something here that euqals amplitudes accross different subbands. accor?
+        splits[-1][a_src].split(inplace=True, datacolumn='data', chanbin=-1)
+        splits[-1][a_src].export_uvfits(outfitsfilename=f"{splits[-1][a_src].projectname}.split.2.uvfits",
+                                        overwrite=True)
 
-# obs.calibrate.recalibration(dispersive=True)
-obs.calibrate.recalibration(dispersive=False)
-obs.store()
-obs.calibrate.apply_calibration()
+else:
+    # initial calibration
+    obs.calibrate.a_priori_calibration()
+    # accor, acscl.
+    # obs.calibrate.accor()
+    # obs.calibrate.ionospheric_corrections()
+    obs.calibrate.main_calibration(fixed_fringe_callib=False, dispersive=True, parang=True)
+    obs.calibrate.apply_calibration()
+    obs.flag.tfcrop()
+    obs.calibrate.recalibration(dispersive=False, parang=False)
+    obs.calibrate.apply_calibration()
+    splits.append(obs.split(sources=obs.sources.phase_calibrators.names + obs.sources.targets.names))
+    # by default sources=obs.sources.names
 
-# obs.flag.tfcrop()
+    for src in obs.sources.phase_calibrators.names + obs.sources.targets.names:
+        splits[-1][src].export_uvfits()
 
-splits.append(obs.ms.split(sources=obs.sources.phase_calibrators.names + obs.sources.targets.names))
+    obs.store()
 
-for src in obs.sources.phase_calibrators.names + obs.sources.targets.names:
-    splits[-1][src].export_uvfits()
+
+rprint("\n\n[bold green]Stopping here so you can have fun with difmap[/bold green]")
+sys.exit(0)
+
+
+###### SELF-CALIBRATION AFTER DIFMAP
+# obs.calibrate.aips.selfcal_with_difmapimage('ek051c.J1605-1139.difmap.2.fits')
+obs.calibrate.aips.selfcal_with_difmapimage('EM161AB.J1605-1139.difmap_noTr.fits')
+
+
+# Apply to the burst data
+obs.calibrate.aips.transfer_calibration(f"{obs.projectname}_2_1.IDI", source="R190520_D")
+
+
+
+
+
+
+
 
