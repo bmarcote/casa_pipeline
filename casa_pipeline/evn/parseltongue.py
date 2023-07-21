@@ -1,10 +1,13 @@
+#! /usr/bin/env python3
+import sys
+import copy
 import glob
 import argparse
 import subprocess
 from pathlib import Path
 import datetime as dt
 from typing import Optional, Union
-# from rich import print as rprint
+from rich import print as rprint
 
 from AIPS import AIPS
 from AIPSTask import AIPSTask
@@ -35,8 +38,8 @@ def max_table_no(uvdata: AIPSUVData, inext: str):
 
 
 def fitld(projectname: str, datain: str, ncount: int = 1, doconcat: int = 1,
-          aipsclass: str = "UVDATA", seq: int = 1, digicor=-1, douvcomp: int = -1,
-          clint: float = 0.25, replace=False):
+          outclass: str = "UVDATA", outseq: int = 1, digicor=-1, douvcomp: int = -1,
+          clint: float = 0.25, replace=True, optype: str = 'UV'):
     """Imports the associated FITS-IDI or UVFITS from a given project into AIPS.
     Note that one and only one of the 'fitsidifiles' or 'uvfits; parameters needs to be provided.
 
@@ -52,7 +55,13 @@ def fitld(projectname: str, datain: str, ncount: int = 1, doconcat: int = 1,
         - uvdata : AIPSUVData
             AIPSUVData that will be created from the imported data. If exists, it will be replaced.
     """
-    uvdata = AIPSImage(projectname, aipsclass, 1, seq)
+    if optype == 'UV':
+        uvdata = AIPSUVData(projectname, outclass, 1, outseq)
+    elif optype == 'IM':
+        uvdata = AIPSImage(projectname, outclass, 1, outseq)
+    else:
+        raise ValueError(f"OPTYPE can only be 'UV' or 'IM', but {optype} found.")
+
     if uvdata.exists():
         if replace:
             uvdata.zap(force=True)
@@ -61,6 +70,10 @@ def fitld(projectname: str, datain: str, ncount: int = 1, doconcat: int = 1,
 
     fitld = AIPSTask('fitld')
     fitld.outdata = uvdata
+    fitld.outname = uvdata.name
+    fitld.outclass = uvdata.klass
+    fitld.outseq = uvdata.seq
+    fitld.outname = uvdata.name
     fitld.douvcomp = douvcomp
     fitld.clint = clint
     fitld.digicor = digicor
@@ -202,7 +215,6 @@ def clcal(uvdata: AIPSUVData, calsour: list, refant: list, snver: int, gainver: 
     clcal.snver = snver
     clcal.gainver = gainver
     clcal.gainuse = gainuse
-    print(clcal.inp())
     clcal()
 
 
@@ -328,7 +340,8 @@ def multi(uvdata: AIPSUVData, outname: str = '', outclass: str = 'MULTI', outseq
     multi.srcname = srcname
     multi.aparm[1:] = aparm
     multi()
-    return multi.outdata
+    return AIPSUVData(outname if outname != '' else uvdata.name, outclass,
+                               outdisk, outseq+1)
 
 
 def fittp(uvdata: Union[AIPSUVData, AIPSImage], dataout: str):
@@ -338,7 +351,7 @@ def fittp(uvdata: Union[AIPSUVData, AIPSImage], dataout: str):
     fittp()
 
 
-def apriori_calibration(aipsid: int, projectname: str, replace=False,
+def apriori_calibration(aipsid: int, projectname: str, replace=True,
                         fitsidifiles: Optional[str] = None,
                         uvfits: Optional[str] = None, run_iono=True):
     """Runs the a-priori calibration in AIPS for VLBI data.
@@ -357,9 +370,9 @@ def apriori_calibration(aipsid: int, projectname: str, replace=False,
 
         # uvdata = AIPSUVData(projectname, "UVDATA", 1, 1)
         # uvtasav = AIPSUVData(projectname, "TASAV", 1, 1)
-        uvdata = fitld(projectname, datain=f"PWD:{fitsidifiles}", aipsclass="UVDATA",
+        uvdata = fitld(projectname, datain=f"PWD:{fitsidifiles}", outclass="UVDATA",
                        replace=replace, doconcat=1, ncount=ncount, digicor=-1, douvcomp=1)
-        uvtasav = fitld(projectname, datain=f"PWD:{projectname}.tasav.FITS", aipsclass="TASAV",
+        uvtasav = fitld(projectname, datain=f"PWD:{projectname}.tasav.FITS", outclass="TASAV",
                         replace=replace, doconcat=-1, ncount=1, digicor=-1, douvcomp=1)
         indxr(uvdata)
         if (not old_uv) or replace:
@@ -367,9 +380,10 @@ def apriori_calibration(aipsid: int, projectname: str, replace=False,
             tacop(uvdata, fromuvdata=uvtasav, inext='FG', inver=1, ncount=1, outver=1)
 
     else:
-        uvdata = fitld(projectname, datain=f"PWD:{uvfits}", aipsclass="UVDATA",
+        uvdata = fitld(projectname, datain=f"PWD:{uvfits}", outclass="UVDATA",
                        replace=replace, doconcat=-1, ncount=1, digicor=-1)
 
+    assert uvdata.exists(), "It seems like {uvdata} does not exist!"
     if run_iono:
         ionos(uvdata)
 
@@ -391,8 +405,14 @@ def main_calibration(aipsid: int, projectname: str,
     assert None not in (target, calsour, bpsour)
     AIPS.userno = aipsid
     if import_uvfits is not None:
-        uvdata = fitld(projectname, datain=f"PWD:{import_uvfits}", aipsclass="UVDATA")
+        outseq = 1
+        while AIPSUVData(projectname, "UVDATA", 1, outseq).exists():
+            outseq += 1
+
+        uvdata = fitld(projectname, datain=f"PWD:{import_uvfits}", outclass="UVDATA", outseq=outseq)
         assert uvdata.exists()
+        if max_table_no(uvdata, 'CL') == 0:
+            indxr(uvdata)
     else:
         uvdata = AIPSUVData(projectname, "UVDATA", 1, 1)
         assert uvdata.exists()
@@ -481,16 +501,16 @@ def selfcalibration(aipsid: int, projectname: str, refant: list, imagefile: str,
      # Guesses the source name from the image file to import
     uvimage = None
     if calsour is not None:
-        uvimage = fitld(calsour, datain=f"PWD:{imagefile}", doconcat=-1, aipsclass='PICLN',
+        uvimage = fitld(calsour, datain=f"PWD:{imagefile}", doconcat=-1, outclass='PICLN',
                         replace=True, ncount=1, digicor=-1)
     elif ('pcal' in imagefile) and (len(phaseref) == 1):
-        uvimage = fitld(phaseref[0], datain=f"PWD:{imagefile}", doconcat=-1, aipsclass='PICLN',
+        uvimage = fitld(phaseref[0], datain=f"PWD:{imagefile}", doconcat=-1, outclass='PICLN',
                         replace=True, ncount=1, digicor=-1)
     else:
         for a_src in (target + phaseref):
             if a_src in imagefile:
                 print(f"It will be : '{a_src}', 'PICLN'.")
-                uvimage = fitld(a_src, datain=f"PWD:{imagefile}", doconcat=-1, aipsclass='PICLN',
+                uvimage = fitld(a_src, datain=f"PWD:{imagefile}", doconcat=-1, outclass='PICLN',
                                 replace=True, ncount=1, digicor=-1)
                 break
 
@@ -515,9 +535,10 @@ def selfcalibration(aipsid: int, projectname: str, refant: list, imagefile: str,
             if not target_split.exists():
                 raise FileNotFoundError(f"A SPLIT for {a_target} could not be found.")
 
-            while AIPSUVData(a_target, "SPLIT", 1, uvsplit.seq + 1).exists():
+            while AIPSUVData(a_target, "SPLIT", 1, target_split.seq + 1).exists():
                 target_split = AIPSUVData(a_target, "SPLIT", 1, target_split.seq + 1)
 
+            highest_seq = target_split.seq + 1
             target_split = multi(uvdata=target_split)
             sn2copy = max_table_no(uvsplit, 'SN')
             sn2create = max_table_no(target_split, 'SN') + 1
@@ -528,53 +549,81 @@ def selfcalibration(aipsid: int, projectname: str, refant: list, imagefile: str,
             split(target_split, sources=[''], gainuse=max_table_no(target_split, "CL"),
                   doband=-1, aparm=[2, 0, 0, 1])
             new_split = AIPSUVData(a_target, "SPLIT", 1, target_split.seq + 1)
-            assert new_split.exists(), f"The SPLIT file for {a_target}, seq number " \
-                    f"{target_split.seq + 1} should have been created in AIPS but is not found."
+            if not new_split.exists():
+                # It may have happened that AIPS cut the source name to 8 characters
+                tmp_split = AIPSUVData(a_target[:8], "SPLIT", 1, 1)
+                while tmp_split.exists():
+                    tmp_split = AIPSUVData(a_target[:8], "SPLIT", 1, tmp_split.seq + 1)
+
+                new_split = AIPSUVData(a_target[:8], "SPLIT", 1, tmp_split.seq - 1)
+                assert new_split.exists(), f"The SPLIT file for {a_target} should have been " \
+                                           "created in AIPS but is not found."
+                new_split.rename(name=a_target, klass="SPLIT", seq=highest_seq + 1)
+
             outfile, niter = f"{projectname}.{a_target}.SPLIT.selfcalNN.UVFITS", 1
             while Path(outfile.replace('NN', str(niter))).exists():
                 niter += 1
 
-            fittp(new_split, f"PWD:{outfile.replace('NN', str(niter - 1))}")
+            fittp(new_split, f"PWD:{outfile.replace('NN', str(niter))}")
 
 
 def transfercal(aipsid: int, projectname: str, uvfile: str, source: list, refant: list,
-                ncount: int = 1, avgchan_split: bool = True, phaseref: Optional[list] = None,
-                calsour: str = None, solint: float = 0.0):
+                ncount: int = 1, avgchan_split: bool = True):
     AIPS.userno = aipsid
     oriuvdata = AIPSUVData(projectname, "UVDATA", 1, 1)
     newuvdata = AIPSUVData(projectname, "UVDATA", 1, 2)
-    while AIPSUVData(projectname, "UVDATA", 1, newuvdata.seq + 1).exists():
+    while newuvdata.exists():
         newuvdata = AIPSUVData(projectname, "UVDATA", 1, newuvdata.seq + 1)
 
     fitld(newuvdata.name, datain=f"PWD:{uvfile}", ncount=ncount, doconcat=1,
-          seq=newuvdata.seq, digicor=-1, douvcomp=1)
-    for n_cl in range(2, max_table_no(oriuvdata, 'CL')):
+          outclass=newuvdata.klass, outseq=newuvdata.seq, digicor=-1, douvcomp=1)
+
+    # the first oriuvdata will only have 1 FG and 2,3 CL
+    for n_cl in range(2, max_table_no(oriuvdata, 'CL')+1):
         tacop(newuvdata, fromuvdata=oriuvdata, inext='CL', inver=n_cl, ncount=1, outver=n_cl)
 
-    for n_sn in range(1, max_table_no(oriuvdata, 'SN')):
+    for n_sn in range(1, max_table_no(oriuvdata, 'SN')+1):
         tacop(newuvdata, fromuvdata=oriuvdata, inext='SN', inver=n_sn, ncount=1, outver=n_sn)
 
-    for n_fg in range(1, max_table_no(oriuvdata, 'FG')):
+    for n_fg in range(1, max_table_no(oriuvdata, 'FG')+1):
         tacop(newuvdata, fromuvdata=oriuvdata, inext='FG', inver=n_fg, ncount=1, outver=n_fg)
 
-    for n_bp in range(1, max_table_no(oriuvdata, 'BP')):
+    for n_bp in range(1, max_table_no(oriuvdata, 'BP')+1):
         tacop(newuvdata, fromuvdata=oriuvdata, inext='BP', inver=n_bp, ncount=1, outver=n_bp)
 
-    split(newuvdata, sources=source, gainuse=max_table_no(newuvdata, "CL"),
+    # sanity check because of AIPS SPLIT issues with src names larger than 8
+    split_sources = copy.deepcopy(source)
+    split_sources += [src[:8] for src in split_sources if len(src) > 8]
+    split(newuvdata, sources=split_sources, gainuse=max_table_no(newuvdata, "CL"),
           doband=1, bpver=max_table_no(newuvdata, "BP"), aparm=[2 if avgchan_split else 0, 0, 0, 1])
 
     uvsplits = {}
     for a_source in source:
         n_seq = 1
         str_calibration = 'cal'
-        while AIPSUVData(a_source, "SPLIT", 1, n_seq).exists():
-            n_seq += 1
+        if AIPSUVData(a_source[:8], "SPLIT", 1, 1).exists():
+            n_seq_cut = 1
+            while AIPSUVData(a_source[:8], "SPLIT", 1, n_seq_cut).exists():
+                    # the first oriuvdata will only have 1 FG and 2,3 CL
+                n_seq_cut += 1
 
-        if n_seq == 1:
-            raise FileNotFoundError(f"A SPLIT file for {a_source} was expected but not found.")
+            split_src = AIPSUVData(a_source[:8], "SPLIT", 1, n_seq_cut - 1)
+            while AIPSUVData(a_source, "SPLIT", 1, n_seq).exists():
+                n_seq += 1
 
-        uvsplits[a_source] = AIPSUVData(a_source, "SPLIT", 1, n_seq - 1)
-        selfcal_split = AIPSUVData(a_source, "SPLIT", 1, n_seq - 2)
+            split_src.rename(name=a_source, klass="SPLIT", seq=n_seq)
+            uvsplits[a_source] = split_src
+            selfcal_split = AIPSUVData(a_source, "SPLIT", 1, n_seq - 1)
+        else:
+            while AIPSUVData(a_source, "SPLIT", 1, n_seq).exists():
+                n_seq += 1
+
+            if n_seq == 1:
+                raise FileNotFoundError(f"A SPLIT file for {a_source} was expected but not found.")
+
+            uvsplits[a_source] = AIPSUVData(a_source, "SPLIT", 1, n_seq - 1)
+            selfcal_split = AIPSUVData(a_source, "SPLIT", 1, n_seq - 2)
+
         if max_table_no(selfcal_split, inext='SN') > 0:
             # Also transfer the selfcal solutions
             tacop(uvsplits[a_source], fromuvdata=selfcal_split, inext='SN',
@@ -592,7 +641,7 @@ def transfercal(aipsid: int, projectname: str, uvfile: str, source: list, refant
         while Path(outfile.replace('NN', str(niter))).exists():
             niter += 1
 
-        fittp(uvsplits[a_source], f"PWD:{outfile.replace('NN', str(niter - 1))}")
+        fittp(uvsplits[a_source], f"PWD:{outfile.replace('NN', str(niter))}")
 
 
 
@@ -626,16 +675,21 @@ if __name__ == '__main__':
                         help="Averages the data when splitting into a single-channel per IF.")
     parser.add_argument('--iono', default=False, action="store_true",
                         help="Runs the ionospheric corrections.")
-    parser.add_argument('--replace', default=False, action="store_true",
+    parser.add_argument('--replace', default=True, action="store_false",
                         help="If already exists, it will overwrite the existing files in AIPS.")
     parser.add_argument('--selfcal', type=str, default=None,
                         help="Run a self-calibration using the given Difmap FITS image file.")
+    parser.add_argument('--transfer', type=str, default=None,
+                        help="Transfers the calibration to a new data set and splits the target "
+                             "sources. Useful e.g. in multiple-pass observations (with e.g. "
+                             "exp_1_1.IDI* and exp_2_1.IDI."
+                             "It needs to be the AIPS name to import the file as provided to FITLD")
 
     args = parser.parse_args()
 
     assert (args.aipsid >= 100) and (args.aipsid < 100000)
-    assert args.initial or args.calib or (args.selfcal is not None), \
-            "At least one --initial (-i) or --calib (-c) are required."
+    assert args.initial or args.calib or (args.selfcal is not None) or (args.transfer is not None),\
+            "At least one --initial (-i), --calib (-c), --selfcal, or --transfer  are required."
 
     if args.phaseref is not None:
         if (len(args.phaseref.split(',')) != 1) and (len(args.phaseref.split(',')) \
@@ -687,5 +741,15 @@ if __name__ == '__main__':
                         solint=args.solint, imagefile=args.selfcal, target=args.target.split(','),
                         phaseref=args.phaseref.split(','))
 
+    if args.transfer is not None:
+        new_files = glob.glob(f"{args.transfer}*")
+        if len(new_files) == 0:
+            raise FileNotFoundError(f"The file(s) {args.transfer} were not found.")
 
+        transfercal(args.aipsid, args.projectname, uvfile=args.transfer,
+                    source=args.target.split(','), refant=args.refant.split(','),
+                    ncount=len(new_files), avgchan_split=args.avgchan)
 
+    aips_steps = [step for (step,do) in zip(('initial', 'calib', 'selfcal', 'transfer'), \
+                                    (args.initial, args.calib, args.selfcal, args.transfer)) if do]
+    rprint(f"\n\n[green]AIPS ({', '.join(aips_steps)}) appears to have ended successfully[/green]")

@@ -1,4 +1,5 @@
 import os
+import glob
 import shutil
 import string
 from pathlib import Path
@@ -1009,6 +1010,54 @@ class Aips(object):
         result.check_returncode()
 
 
+    def transfer_calibration(self, fitsididata: str, aipsno: Optional[int] = None,
+                             source: Optional[Union[list,str]] = None, avgchan: bool = True):
+        """Transfers the calibration conducted in the current dataset (within AIPS) to
+        a new set of FITS-IDI files that should belong to the same observation
+        (but e.g. a different correlator pass).
+
+        It will write out a SPLIT FITS file for the given sources with the latest calibration
+        applied.
+
+        Inputs
+        ------
+
+        - fitsididata : str
+            Name of the FITS-IDI/UVFITS files to import into AIPS. In case of multiple files,
+            it should be the root name of the files as typically used in AIPS when importing.
+            For example, if the files to import are exp_2_1.IDI1...9, this param should be
+            'exp_2_1.IDI'.
+        - aipsno: int   (default None)
+            Number to use for the AIPS user. By default it will retrieve it from the project
+            name.
+        - source : list or str  (default None)
+            The list of sources to which the calibration will be applied and will be split'ed
+            in UVFITS files. If str, it needs to be a comma-separated succession of sources.
+        - avgchan : bool  (default True)
+            If True, the final SPLIT files will be single-channel multiple-IF FITS files.
+            This should be consistent with the options used during selfcalibration.
+        """
+        fitsfiles = glob.glob(f"{fitsididata}*")
+        aipsno = self.aipsno_from_project() if aipsno is None else aipsno
+        if len(fitsfiles) == 0:
+            raise FileNotFoundError(f"The file {fitsididata} cannot be found.")
+
+        if source is None:
+            source = ','.join(self._ms.sources.targets.names)
+        elif type(source) == str:
+            source = ','.join([src.strip() for src in source.split(',')])
+        else:
+            source = ','.join(source)
+
+        cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", str(aipsno), self._ms.projectname,
+               "--transfer", str(fitsididata), "--target", source,
+               "--refant", ','.join(self._ms.refant)]
+        if avgchan:
+            cmd += ["--avgchan"]
+
+        rprint(f"\n[bold]{' '.join(cmd)}[/bold]")
+        result = subprocess.run(cmd, shell=False, stdout=None, stderr=subprocess.STDOUT)
+        result.check_returncode()
 
 
     def __init__(self, ms: capi.Project):

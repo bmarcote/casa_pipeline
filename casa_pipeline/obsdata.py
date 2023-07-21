@@ -800,7 +800,7 @@ class Importing(object):
 
         antnames = m.getcol('NAME')
         if antnames[0].isnumeric():
-            m.putcol('NAME', m.getcol('STATION'))
+            m.putcol('NAME', list(m.getcol('STATION')))
 
         m.done()  # just because I would not trust the CASA code...
 
