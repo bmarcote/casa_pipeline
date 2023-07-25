@@ -1,3 +1,6 @@
+"""Calibration-related tasks.
+Function that perform different stages of the data reduction of a interferometric radio observation.
+"""
 import os
 import glob
 import shutil
@@ -5,10 +8,10 @@ import string
 from pathlib import Path
 import subprocess
 import datetime as dt
-from astropy.coordinates import SkyCoord
-import astropy.units as u
 from dataclasses import dataclass
 from typing import Optional, Union
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 from rich import print as rprint
 import casatasks
 from casatasks.private import tec_maps
@@ -18,10 +21,7 @@ from casatools import componentlist as cl
 import casa_pipeline as capi
 
 _FILE_DIR = os.path.dirname(os.path.realpath(__file__))
-"""Diferent functions that can be used directly from this module in order to calibrate the data.
-Later on a class Calibration is defined, which will use these functions but by using the
-obsdata/Ms objects.
-"""
+
 @dataclass
 class CallibEntry:
     """Defines an entry in a calibration tables library.
@@ -40,10 +40,17 @@ class CallibEntry:
 
 
 class CallibEntries():
-    def __init__(self):
+    """Defines a list of entries in the CASA calibration library (callib) file.
+    An entry is defined in a single line, containing a name assigned to the entry
+    (to distinguish from other entries), the associated calibration table, and the parameters
+    defining how to apply such calibration table.
+    """
+    def __init__(self) -> None:
         self._entries = []
 
-    def add(self, new_entry: CallibEntry):
+    def add(self, new_entry: CallibEntry) -> None:
+        """Adds a new entry to the list.
+        """
         assert isinstance(new_entry, CallibEntry), f"The 'new_entry' (currently {new_entry}) " \
                                                    "should be a CallibEntry object."
         if new_entry.name in self.names:
@@ -713,7 +720,8 @@ class Calibration(object):
         if (not replace) and caltable.exists():
             raise FileExistsError(f"The calibration table {caltable} exists and 'replace' is" \
                                   "set to False. Cannot be overwritten.")
-        elif replace and caltable.exists():
+
+        if replace and caltable.exists():
             shutil.rmtree(caltable)
 
         if field is None:

@@ -4,6 +4,7 @@ The metadata is obtained from the MS itself.
 """
 from __future__ import annotations
 import os
+import copy
 import glob
 import shutil
 import subprocess
@@ -16,17 +17,17 @@ from pathlib import Path
 from typing import Optional, Iterable, NoReturn, List, Union
 from dataclasses import dataclass
 from natsort import natsort_keygen
-import casatasks
 from enum import Enum
-from astropy import units as u
 from astropy.io import fits
+from astropy import units as u
+from astropy import coordinates as coord
 from rich import print as rprint
 # import blessed
-from astropy import coordinates as coord
+import casatasks
+from casatools import table as tb
 from casa_pipeline.casavlbitools import fitsidi
 from casa_pipeline.casa_pipeline import check_antab_idi
 import casa_pipeline as capi
-from casatools import table as tb
 
 
 # Because as far as I know CASA folks do not have a straight away to get this simple information
@@ -70,7 +71,9 @@ class Stokes(IntEnum):
 
 
 class ObsEpoch(object):
-    """
+    """Time information from the observation.
+    It provides different time values like the epoch of the observation (in different formats),
+    and the time range (or duration) of the observation.
     """
     @property
     def epoch(self) -> dt.date:
@@ -81,59 +84,69 @@ class ObsEpoch(object):
 
         return self._epoch
 
+
     @property
     def ymd(self) -> str:
         """Returns the epoch at the (start of) observations, in YYMMDD format.
         """
-        if self._epoch is None:
-            raise ValueError("The epoch of the observation has not been initialized yet.")
-
         return self.epoch.strftime('%y%m%d')
 
-    @property
-    def mjd(self) -> int:
-        if self._epoch is None:
-            raise ValueError("The epoch of the observation has not been initialized yet.")
 
-        return int(capi.tools.date2mjd(self.epoch))
+    @property
+    def mjd(self) -> float:
+        """Returns the Modifyed Julian Day (MJD) relative to the start of the observation.
+        """
+        if self._starttime is not None:
+            return float(capi.tools.date2mjd(self.starttime))
+
+        return float(capi.tools.date2mjd(dt.datetime(*self.epoch.timetuple()[:6])))
+
 
     @property
     def doy(self) -> int:
-        if self._epoch is None:
-            raise ValueError("The epoch of the observation has not been initialized yet.")
-
+        """Returns the day of the year (DOY) related to the start of the observation.
+        """
         return int(self.epoch.strftime('%j'))
+
 
     @property
     def starttime(self) -> dt.datetime:
+        """Returns the start time of the observation in datetime format.
+        """
         if self._starttime is None:
             raise ValueError("The 'start_datetime' has not been initialized yet.")
 
         return self._starttime
 
+
     @starttime.setter
     def starttime(self, start_datetime: dt.datetime):
         if self._endtime is not None:
-            assert (self.endtime - start_datetime) > 0, \
+            assert (self.endtime - start_datetime) > dt.timedelta(days=0), \
                    "Starting time needs to be earlier than ending time."
 
         self._starttime = start_datetime
         self._epoch = self.starttime.date()
 
+
     @property
     def endtime(self) -> dt.datetime:
+        """Returns the ending time of the observation in datetime format.
+        """
         if self._endtime is None:
             raise ValueError("The 'end_datetime' has not been initialized yet.")
 
         return self._endtime
 
+
     @endtime.setter
     def endtime(self, end_datetime: dt.datetime):
         if self._starttime is not None:
-            assert (end_datetime - self.starttime) > 0, \
+            assert (end_datetime - self.starttime) > dt.timedelta(days=0), \
                    "Ending time needs to be later than starting time."
 
         self._endtime = end_datetime
+
 
     @property
     def duration(self) -> u.Quantity:
@@ -143,14 +156,12 @@ class ObsEpoch(object):
 
         return ((self.endtime - self.starttime).total_seconds()*u.s).to(u.hour)
 
-    def __init__(self, start_datetime: dt.datetime = None,
-                 end_datetime: dt.datetime = None):
+
+    def __init__(self, start_datetime: Optional[dt.datetime] = None,
+                 end_datetime: Optional[dt.datetime] = None) -> None:
         self._starttime = start_datetime
         self._endtime = end_datetime
-        if self._starttime is not None:
-            self._epoch = self.starttime.date()
-        else:
-            self._epoch = None
+        self._epoch = self.starttime.date() if self.starttime is not None else None
 
 
 
@@ -174,8 +185,9 @@ class Source(object):
         return self._name
 
     @property
-    def coordinates(self) -> coord.SkyCoord:
+    def coordinates(self) -> Optional[coord.SkyCoord]:
         """Coordinates of the source, as astropy.coordinate.SkyCoord type.
+        Returns None if they haven't yet been initialized.
         """
         return self._coordinates
 
@@ -214,18 +226,21 @@ class Source(object):
                              f"({new_type}) has an unexpected type {type(new_type)}, " \
                              "while str/SourceType were expected.")
 
+
     @property
-    def model(self) -> Path:
+    def model(self) -> Optional[Path]:
         """Source model file (generated after imaging or other tasks and can be used for calibration).
         """
         return self._model
 
+
     @model.setter
-    def model(self, new_model: Union[Path, str]):
+    def model(self, new_model: Optional[Union[Path, str]]):
         if isinstance(new_model, str):
             new_model = Path(new_model)
 
         self._model = new_model
+
 
     def __init__(self, name: str, sourcetype: SourceType,
                  coordinates: Optional[coord.SkyCoord] = None,
@@ -241,17 +256,24 @@ class Source(object):
         self._coordinates = coordinates
         self.model = model
 
+
     def __iter__(self):
         for key in ('name', 'type', 'protected'):
             yield key, getattr(self, key)
 
-    def __str__(self):
-        return f"Source({self.name}, {self.type.name}, at {self.coordinates.to_string('hmsdms')})"
 
-    def __repr__(self):
+    def __str__(self) -> str:
+        if self.coordinates is not None:
+            return f"Source({self.name}, {self.type.name}, at {self.coordinates.to_string('hmsdms')})"
+        else:
+            return f"Source({self.name}, {self.type.name}, unknown coordinates)"
+
+
+    def __repr__(self) -> str:
         return self.__str__()
 
-    def json(self):
+
+    def json(self) -> dict:
         """Returns a dict with all attributes of the object.
         I define this method to use instead of .__dict__ as the later only reporst
         the internal variables (e.g. _username instead of username) and I want a better
@@ -264,9 +286,10 @@ class Source(object):
             elif isinstance(val, coord.SkyCoord):
                 d[key] = val.to_string('hmsdms')
             else:
-                d[key] = val
+                d[key] = str(val)
 
         return d
+
 
 
 class Sources(object):
@@ -274,24 +297,29 @@ class Sources(object):
     """
     def __init__(self, sources: Optional[Iterable[Source]] = None):
         if sources is not None:
-            self._sources = sources[:]
+            self._sources = copy.deepcopy(list(sources))
         else:
             self._sources = []
 
-    def append(self, new_source: Source) -> NoReturn:
+
+    def append(self, new_source: Source) -> None:
         """Adds a new source to the collection of sources.
 
         Note that this function and "add" are completely equivalent.
         """
-        assert isinstance(new_source, Source)
+        if new_source.name in self.names:
+            raise ValueError("The specified source is already in the Sources list.")
+
         self._sources.append(new_source)
 
-    def add(self, new_source: Source) -> NoReturn:
+
+    def add(self, new_source: Source) -> None:
         """Adds a new source to the collection of sources.
 
         Note that this function and "add" are completely equivalent.
         """
         self.append(new_source)
+
 
     @property
     def names(self) -> List[str]:
@@ -299,31 +327,55 @@ class Sources(object):
         """
         return [s.name for s in self._sources]
 
+
     @property
     def types(self) -> List[SourceType]:
         """Returns the types of all sources in Sources.
         """
         return [s.type for s in self._sources]
 
+
     @property
-    def coordinates(self) -> List[coord.SkyCoord]:
+    def coordinates(self) -> List[Optional[coord.SkyCoord]]:
         """Returns the coordinates of all sources in Sources.
         """
         return [s.coordinates for s in self._sources]
 
-    # TODO: create a setter for these ones, where one can specify a string or list.
-    # it will check that the source exists, and then specify it as such
+
+    def change_type(self, source: str, new_source_type: SourceType):
+        """Changes the type of the given source to be a target source.
+        The source must already be in the list of sources.
+        """
+        if source not in self.names:
+            raise ValueError("The introduced source ({source}) is not part of the observation.")
+
+        self[source].type = new_source_type
+
     @property
     def targets(self) -> Sources:
         """Returns the target sources.
         """
         return Sources([s for s in self._sources if s.type == SourceType.target])
 
+    @targets.setter
+    def targets(self, new_target: str):
+        """Changes the type of the given source to be a target source.
+        The source must already be in the list of sources.
+        """
+        self.change_type(new_target, SourceType.target)
+
     @property
     def phase_calibrators(self) -> Sources:
         """Returns the phase calibrator sources.
         """
         return Sources([s for s in self._sources if s.type == SourceType.calibrator])
+
+    @phase_calibrators.setter
+    def phase_calibrators(self, new_target: str):
+        """Changes the type of the given source to be a phase calibrator source.
+        The source must already be in the list of sources.
+        """
+        self.change_type(new_target, SourceType.calibrator)
 
     @property
     def all_calibrators(self) -> Sources:
@@ -338,11 +390,25 @@ class Sources(object):
         """
         return Sources([s for s in self._sources if s.type == SourceType.other])
 
+    @other_sources.setter
+    def other_sources(self, new_other_source: str):
+        """Changes the type of the given source to be a "other" source.
+        The source must already be in the list of sources.
+        """
+        self.change_type(new_other_source, SourceType.other)
+
     @property
     def fringe_finders(self) -> Sources:
         """Returns the fringe-finder sources.
         """
         return Sources([s for s in self._sources if s.type == SourceType.fringefinder])
+
+    @fringe_finders.setter
+    def fringe_finders(self, new_fringefinder: str):
+        """Changes the type of the given source to be a fringe finder source.
+        The source must already be in the list of sources.
+        """
+        self.change_type(new_fringefinder, SourceType.fringefinder)
 
     def __len__(self):
         return len(self._sources)
@@ -351,7 +417,7 @@ class Sources(object):
         return self._sources[self.names.index(key)]
 
     def __delitem__(self, key):
-        return self._sources.remove(self.names.index(key))
+        return self._sources.remove(self[key])
 
     def __iter__(self):
         return self._sources.__iter__()

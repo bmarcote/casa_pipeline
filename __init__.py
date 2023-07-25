@@ -1,4 +1,5 @@
-from .casa_pipeline.obsdata import Stokes, Source, Sources, SourceType, Antenna, Antennas, FreqSetup, ObsEpoch
+from .casa_pipeline.obsdata import Stokes, Source, Sources, SourceType, Antenna, Antennas, FreqSetup
+from .casa_pipeline.obsdata import ObsEpoch as ObsEpoch
 from .casa_pipeline.project import Project
 from .casa_pipeline import project
 from .casa_pipeline import obsdata

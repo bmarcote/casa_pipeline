@@ -1,25 +1,32 @@
 #!/usr/bin/env python3
+"""Defines a project that specifies an interferometric radio observation.
+This module defines all usual metadata and formats that are spected for such data
+and the actions that the user may expect to perform on it.
+
+A project is expected to be related to some observations carried out by e.g. EVN, GMRT,...
+and defines the set of tasks required during a normal data reduction as calibration, plotting.
+"""
 import os
+import copy
+import time
 import pickle
 import logging
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional, Union, Iterable #, Tuple, NoReturn, List, Tuple
 # import blessed
+# from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import yaml
 import numpy as np
 from astropy import units as u
 from astropy import coordinates as coord
 from rich import print as rprint
 from rich import progress
-import casa_pipeline as capi
 import casatasks
 from casatools import msmetadata as msmd
 from casatools import table as tb
+import casa_pipeline as capi
 
-
-import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 
 _SCI_PACKAGE = ('CASA', 'AIPS')
@@ -56,10 +63,9 @@ class Project(object):
 
     @property
     def msfile(self) -> Path:
-        """Returns the name of the MS file (libpath.Path object) associated to this correlator pass.
+        """Returns the name of the MS file (pathlib.Path object) associated to this correlator pass.
         """
         return self._msfile
-
 
     @property
     def uvfitsfile(self) -> Union[Path, None]:
@@ -79,15 +85,21 @@ class Project(object):
 
     @property
     def time(self) -> capi.ObsEpoch:
+        """Returns an ObsEpoch object containing the times associated to the observation.
+        """
         return self._time
 
     @property
     def antennas(self) -> capi.Antennas:
+        """Returns an Antennas object containing all antennas related to the given observation.
+        """
         return self._antennas
 
     @property
     def refant(self) -> list:
-        return self._refant
+        """Returns a sorted list of the antenna names to be used as reference in calibration.
+        """
+        return copy.deepcopy(self._refant)
 
     @refant.setter
     def refant(self, antennas: Union[str, list]):
@@ -98,14 +110,20 @@ class Project(object):
         if isinstance(antennas, str):
             self._refant = [ant.strip() for ant in antennas.split(',')]
         elif isinstance(antennas, list):
-            self._refant = antennas
+            self._refant = copy.deepcopy(antennas)
 
     @property
-    def freqsetup(self) -> capi.FreqSetup:
+    def freqsetup(self) -> Union[capi.FreqSetup, None]:
+        """Returns a FreqSetup object (if defined) containing the frequency information of
+        the observation data.
+        """
         return self._freqsetup
 
     @property
     def sources(self) -> capi.Sources:
+        """Returns a Sources object containing the information of all sources scheduled
+        in the observation.
+        """
         return self._sources
 
     @property
@@ -160,28 +178,28 @@ class Project(object):
         return self._calibration
 
     @property
-    def flag(self):
-    # def flag(self) -> capi.flagging.Flagging:
+    def flag(self) -> capi.flagging.Flagging:
+    # def flag(self):
         return self._flagging
 
     @property
-    def plot(self):
-    # def plot(self) -> capi.plotting.Plotting:
+    def plot(self) -> capi.plotting.Plotting:
+    # def plot(self):
         return self._plotting
 
     @property
-    def image(self):
-    # def image(self) -> capi.imaging.Imaging:
+    def image(self) -> capi.imaging.Imaging:
+    # def image(self):
         return self._imaging
 
     @property
-    def importdata(self):
-    # def importdata(self) -> capi.obsdata.Importing:
+    def importdata(self) -> capi.obsdata.Importing:
+    # def importdata(self):
         #TODO: importing should also be a sub-class (network dependend)
         return self._importing
 
     def __new__(cls, *args, **kwargs):
-        obj = super().__new__(cls)
+        obj = super().__new__(cls, *args, **kwargs)
         return obj
 
     def __init__(self, projectname: str, observatory: str = 'EVN', sci_package: str = 'CASA',
@@ -211,8 +229,9 @@ class Project(object):
             cwd : Path or str  [optional. Default = $PWD]
                 The default directory where the pipeline will run, search for and create the files.
         """
-        assert (projectname != '') and (isinstance(projectname, str)), \
-               "The project name needs to be a non-empty string."
+        if (projectname != '') and (isinstance(projectname, str)):
+               raise ValueError("The project name needs to be a non-empty string.")
+
         self._projectname = projectname
 
         self._logging_level = logging_level

@@ -69,11 +69,10 @@ def fitld(projectname: str, datain: str, ncount: int = 1, doconcat: int = 1,
             return uvdata
 
     fitld = AIPSTask('fitld')
-    fitld.outdata = uvdata
+    # fitld.outdata = uvdata
     fitld.outname = uvdata.name
     fitld.outclass = uvdata.klass
     fitld.outseq = uvdata.seq
-    fitld.outname = uvdata.name
     fitld.douvcomp = douvcomp
     fitld.clint = clint
     fitld.digicor = digicor
