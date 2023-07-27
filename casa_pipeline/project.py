@@ -6,12 +6,14 @@ and the actions that the user may expect to perform on it.
 A project is expected to be related to some observations carried out by e.g. EVN, GMRT,...
 and defines the set of tasks required during a normal data reduction as calibration, plotting.
 """
+from __future__ import annotations
 import os
 import copy
 import time
 import pickle
 import logging
 from collections import defaultdict
+import datetime as dt
 from pathlib import Path
 from typing import Optional, Union, Iterable #, Tuple, NoReturn, List, Tuple
 # import blessed
@@ -234,6 +236,14 @@ class Project(object):
 
         self._projectname = projectname
 
+        if observatory.upper().strip() not in _OBSERVATORIES:
+            rprint(f"\n[bold red]The requested observatory ({observatory}) "
+                   "is not supported[/bold red]")
+            rprint(f"[red]Only {', '.join(_OBSERVATORIES)} are accepted.[/red]")
+            raise ValueError("The requested observatory is not implemented.")
+
+        self._observatory = observatory.upper().strip()
+
         self._logging_level = logging_level
         logging.basicConfig(level=logging_level, format="%(asctime)s %(levelname)s:\n%(message)s",
                             datefmt="%Y-%m-%d %H:%M")
@@ -248,8 +258,8 @@ class Project(object):
         self._scipackage = sci_package
         self.logger.debug(f"The package {sci_package} will be used for data reduction.")
         if (self._scipackage == 'AIPS') and (not capi.tools.aips_exists()):
-            rprint(f"\n[bold red]AIPS is set to be used, but not AIPS environment is found[/bold red]")
-            rprint(f"[red]Did you run the AIPS LOGIN.SH (or CSH) script?[/red]")
+            rprint("\n[bold red]AIPS is set to be used, but no AIPS environment found[/bold red]")
+            rprint("[red]Did you run the AIPS LOGIN.SH (or CSH) script?[/red]")
             raise OSError("No AIPS environment is found but AIPS will be used.")
 
         if cwd is None:
@@ -273,7 +283,7 @@ class Project(object):
             self._args = {}
 
         if 'epoch' in self.params:
-            self._time = capi.ObsEpoch(int(self.params['epoch']))
+            self._time = capi.ObsEpoch(dt.datetime.strptime(str(self.params['epoch']), "%y%m%d"))
         else:
             self._time = capi.ObsEpoch(None)
 
@@ -476,14 +486,14 @@ class Project(object):
         rprint(f"[green]Total time elapsed: {(time.time()-start_time)/60:.2f} min.[/green]")
         for antenna_name in self.antennas.names:
             self.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
-            # this is the same as two segments before, but in case one antenna just sent zero data...
+            # this is the same as two segments before, but in case one antenna just sent zero data
             self.antennas[antenna_name].observed = len(self.antennas[antenna_name].subbands) > 0
 
         self.listobs()
         # self.summary()
 
 
-    def scan_numbers(self) -> list:
+    def scan_numbers(self) -> list[int]:
         """Returns the list of scans that were observed in the observation.
         """
         m = msmd(str(self.msfile))
@@ -497,7 +507,8 @@ class Project(object):
 
         return scannumbers
 
-    def antennas_in_scan(self, scanno: int) -> list:
+
+    def antennas_in_scan(self, scanno: int) -> list[str]:
         """Returns a list with all antennas that observed the given scan.
         """
         m = msmd(str(self.msfile))
@@ -511,34 +522,32 @@ class Project(object):
             m.close()
 
 
-    def antennas_in_scans(self, scanno: list) -> list:
+    def antennas_in_scans(self, scanno: list[int]) -> list[list[str]]:
         """Returns a list with all antennas that observed each given scan.
         """
         m = msmd(str(self.msfile))
         scan_list = []
         try:
             if not m.open(str(self.msfile)):
-                return ValueError(f"The MS file {self.msfile} could not be openned.")
+                raise ValueError(f"The MS file {self.msfile} could not be openned.")
 
             antenna_names = m.antennanames()
-            # with progress.Progress() as progress_bar:
-            #     task = progress_bar.add_task("[yellow]Going through scans[/yellow]", total=len(scanno))
-            # Fast enough that it does not need any progress bar
             for scan in scanno:
                 scan_list.append([antenna_names[ant] for ant in m.antennasforscan(scan)])
-                # progress_bar.update(task, advance=1)
 
             return scan_list
         finally:
             m.close()
 
-    def scans_in_antennas(self) -> dict:
+
+    def scans_in_antennas(self) -> dict[str, list[int]]:
         """Returns a dictionary with all antennas that observed as keys and a list of all scans
         that they observed as values.
         """
         all_scans = self.scan_numbers()
         scan_list = self.antennas_in_scans(all_scans)
         ant_list = {ant: [] for ant in self.antennas.names}
+        # TODO: check that this actually provides the expected result!
         for ant in ant_list:
             for i,scan  in enumerate(scan_list):
                 if ant in scan:
@@ -547,28 +556,30 @@ class Project(object):
         return ant_list
 
 
-    def scans_with_source(self, source_name: str) -> list:
+    def scans_with_source(self, source_name: str) -> list[int]:
         """Returns a list with the numbers of the scans where the given source was observed.
         """
         m = msmd(str(self.msfile))
         try:
             if not m.open(str(self.msfile)):
-                return ValueError(f"The MS file {self.msfile} could not be openned.")
+                raise ValueError(f"The MS file {self.msfile} could not be openned.")
 
             return m.scansforfield(source_name)
         finally:
             m.close()
 
-    def times_for_scans(self, scanno: list) -> list:
+
+    def times_for_scans(self, scanno: list[int]) -> list:
         """Returns the time for the specified scan number.
         """
+        # TODO: check and update what is the returned time of the function
         if len(scanno) == 0:
             raise ValueError("There should be at least one scan to check in the list.")
 
         m = msmd(str(self.msfile))
         try:
             if not m.open(str(self.msfile)):
-                return ValueError(f"The MS file {self.msfile} could not be openned.")
+                raise ValueError(f"The MS file {self.msfile} could not be openned.")
 
             return m.timesforscans(scanno)
         finally:
@@ -581,13 +592,14 @@ class Project(object):
         m = msmd(str(self.msfile))
         try:
             if not m.open(str(self.msfile)):
-                return ValueError(f"The MS file {self.msfile} could not be openned.")
+                raise ValueError(f"The MS file {self.msfile} could not be openned.")
 
             return m.timesforscan(scanno)
         finally:
             m.close()
 
-    def best_scan_from_source(self, source_name: str, verbose: bool = True):
+
+    def best_scan_from_source(self, source_name: str, verbose: bool = True) -> Optional[tuple]:
         """Returns the scan from the given source where more antennas participated.
         """
         #TODO: in a future iteraction, do statistics on the data to also determine which one
@@ -595,37 +607,39 @@ class Project(object):
         scans = self.scans_with_source(source_name)
         ants = self.antennas_in_scans(scans)
         max_ants = -1
-        best_scan = {}
-        for scan,ant in zip(scans, ants):
+        best_scan : dict[int, list] = {}
+        for scan, ant in zip(scans, ants):
             if len(ant) >= max_ants:
                 best_scan[scan] = ant
                 max_ants = len(ant)
 
         if len(best_scan) == 1:
+            best_scan_tuple = next(iter(best_scan.items()))
             if verbose:
-                rprint(f"\n[bold]The scan {best_scan.keys()[0]} is the best one as " \
+                rprint(f"\n[bold]The scan {best_scan_tuple[0]} is the best one as " \
                        f"{max_ants} antennas observed it.[/bold]\n")
 
-            return best_scan.keys()[0]
+            return best_scan_tuple
         elif len(best_scan) > 1:
+            best_scan_keys = tuple(best_scan.keys())
+            best_scan_vals = tuple(best_scan.values())
             if verbose:
-                rprint(f"\n[bold]The scans {', '.join(best_scan.keys())} are the best one as " \
-                       f"{max_ants} antennas observed it.[/bold]\n")
-            return best_scan.keys()
+                rprint(f"\n[bold]The scans {', '.join((str(s) for s in best_scan_keys))} "
+                       f"are the best one as {max_ants} antennas observed it.[/bold]\n")
+            return (best_scan_keys, best_scan_vals)
         else:
             rprint("[yellow]No scan found for the given source.[/yellow]")
             return None
 
 
-
-    def listobs(self, listfile: Union[Path, str] = None, overwrite=True) -> dict:
+    def listobs(self, listfile: Optional[Union[Path, str]] = None, overwrite: bool = True) -> dict:
         listfile = self.outdir / f"{self.projectname}-listobs.log" if listfile is None else listfile
         return casatasks.listobs(self.msfile.name, listfile=str(listfile), overwrite=overwrite)
 
 
     def split(self, sources: Optional[Union[Iterable[str], str, None]] = None,
               datacolumn='corrected', keepflags=False, chanbin: int = -1,
-              inplace=False, **kwargs):
+              inplace=False, **kwargs) -> Optional[dict[str, Project]]:
         """Splits all the data from all calibrated sources.
         If sources is None, then all sources will be split.
 
@@ -660,6 +674,8 @@ class Project(object):
         else:
             sources = self.sources.names
 
+        assert self.freqsetup is not None, \
+               "FreqSetup should already be known for the given MS when split."
         if ((chanbin == -1) or (chanbin > 1)) and (self.freqsetup.channels > 1):
             kwargs['chanaverage'] = True
             kwargs['chanbin'] = self.freqsetup.channels
@@ -676,6 +692,7 @@ class Project(object):
             casatasks.mstransform(vis=str(self.msfile), outputvis=ms_name,
                                   keepflags=keepflags, datacolumn=datacolumn, **kwargs)
             self._msfile = Path(ms_name)
+            return None
         else:
             suffix = 1
             while any([os.path.isdir(f"{self.projectname}.{a_source}" \
@@ -687,9 +704,10 @@ class Project(object):
                     ms_name = f"{self.projectname}.{a_source}" \
                               f"{'' if suffix == 1 else '.'+str(suffix)}.ms"
                     casatasks.mstransform(vis=str(self.msfile), outputvis=ms_name,
-                                          field=a_source, keepflags=keepflags, datacolumn=datacolumn, **kwargs)
+                                          field=a_source, keepflags=keepflags,
+                                          datacolumn=datacolumn, **kwargs)
                     splits[a_source] = Project(ms_name.replace('.ms', ''), cwd=self.cwd,
-                                          params=self.params, logger=self._logger)
+                                          params=self.params, logging_level=self._logging_level)
                     self.splits[a_source].append(splits[a_source])
                 except: #TODO: which error is when it does not find a source?
                     rprint(f"[bold red]Could not create a split MS file for {a_source}.[/bold red]")
@@ -710,7 +728,7 @@ class Project(object):
                                overwrite=overwrite)
 
 
-    def exists_local_copy(self):
+    def exists_local_copy(self) -> bool:
         """Checks if there is a local copy of the Experiment object stored in a local file.
         """
         return self._local_copy.exists()
@@ -721,7 +739,7 @@ class Project(object):
         it will be '.{projectname.lower()}.obj' where exp is the name of the experiment.
         """
         if path is not None:
-            self._local_copy = path
+            self._local_copy = path if isinstance(path, Path) else Path(path)
 
         with open(self._local_copy, 'wb') as file:
             pickle.dump(self, file)
@@ -729,13 +747,14 @@ class Project(object):
         self.logger.debug(f"Local copy of {self.projectname} stored at {self._local_copy}.")
 
 
+    # TODO: make this function static
     def load(self, path: Optional[Union[Path, str]] = None) -> bool:
         """Loads the current Experiment that was stored in a file in the indicated path.
         If path is None, it assumes the standard path of '.{exp}.obj', where exp is the
         name of the experiment.
         """
         if path is not None:
-            self._local_copy = path
+            self._local_copy = path if isinstance(path, Path) else Path(path)
 
         with open(self._local_copy, 'rb') as file:
             obj = pickle.load(file)
@@ -753,6 +772,7 @@ class Project(object):
         self.logger.info(f"Loaded Project object from the stored local copy at {self._local_copy}.")
         return True
 
+
     def summary(self, outfile: Union[str, Path, None] = None):
     #     TODO:  this is commented out because I have issues installing blessed within the CASA
     #     environment in my desktop
@@ -768,12 +788,16 @@ class Project(object):
     #             s += term.bright_black('Observatory: ') + f"{self.observatory}\n"
             s_file += [f"Observatory: {self.observatory}"]
     #         s += term.bold_green('SOURCES\n')
-        s_file += [f"Central frequency: {self.freqsetup.frequency:.2}"]
-        s_file += [f"With a bandwidth of {self.freqsetup.bandwidth.to(u.MHz)} divided in " \
-                   f"{self.freqsetup.n_subbands} x " \
-                   f"{self.freqsetup.bandwidth_per_subband.to(u.MHz)}" \
-                   f" subbands."]
-        s_file += [f"{self.freqsetup.channels} spectral channels per subband.\n"]
+
+        if self.freqsetup is not None:
+            s_file += [f"Central frequency: {self.freqsetup.frequency:.2}"]
+            s_file += [f"With a bandwidth of {self.freqsetup.bandwidth.to(u.MHz)} divided in " \
+                       f"{self.freqsetup.n_subbands} x " \
+                       f"{self.freqsetup.bandwidth_per_subband.to(u.MHz)}" \
+                       f" subbands."]
+            s_file += [f"{self.freqsetup.channels} spectral channels per subband.\n"]
+        else:
+            s_file += ["Frequency setup: not available.\n"]
 
         s_file += [f"Time range: {self.time.starttime} to {self.time.endtime}\n"]
 
@@ -793,9 +817,9 @@ class Project(object):
         for src in self.sources:
     #             s += term.bright_black(f"{src.name}: ") + f"src.coordinates.\n"
             s_file += [f"{src.name}:{' '*(longest_src_name-len(src.name))} " \
-                       f"{src.coordinates.to_string('hmsdms')}"]
-    #
-    #
+                    f"{src.coordinates.to_string('hmsdms') if src.coordinates is not None else ''}"]
+
+
         s_file += ["\n## Antennas"]
         s_file += ["   Did Observe?  Subbands"]
         for ant in self.antennas:
@@ -825,8 +849,8 @@ class Project(object):
     #         s += term.bright_black('') + f"\n"
 
 
-    def __repr__(self, *args, **kwargs):
+    def __repr__(self) -> str:
         return f"casa_pipeline.project.Project({self.projectname})"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"<Project {self.projectname}>"

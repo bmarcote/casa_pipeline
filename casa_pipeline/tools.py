@@ -3,11 +3,11 @@ import sys
 import subprocess
 import datetime
 from pathlib import Path
-from typing import Iterable, Union, Optional, Tuple
+from typing import Iterable, Union, Optional, Generator
 from astropy.io import fits
 from astropy import units as u
 
-def chunkert(counter: int, max_length: int, increment: int) -> Tuple[int, int]:
+def chunkert(counter: int, max_length: int, increment: int) -> Generator[Iterable[int], None, None]:
     """Silly function to select a subset of an interval in
        [counter, counter + increment] : 0 < counter < max_length.
 
@@ -26,17 +26,6 @@ def percentage(x, y):
     return (x / y)*100.0
 
 
-def log_it(logger):
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            logger.debug(f"{func.__name__}({', '.join(args)}{', ' if len(kwargs) > 0 else ''}" \
-                         f"{', '.join([k+'='+v for k,v in kwargs.items()])})")
-
-            return func(*args, **kwargs)
-
-        return wrapper
-
-
 def shell_command(command: str, parameters: Optional[Union[str, Iterable[str]]] = None,
                   shell: bool = True, bufsize=-1, stdout=None, stderr=subprocess.STDOUT):
     """Runs the provided command in the shell with some arguments if necessary.
@@ -44,7 +33,7 @@ def shell_command(command: str, parameters: Optional[Union[str, Iterable[str]]] 
     if fails. Parameters must be either a single string or a list, if provided.
     """
     if isinstance(parameters, Iterable):
-        full_shell_command = [command] + parameters
+        full_shell_command = [command] + list(parameters)
     else:
         full_shell_command = [command] if parameters is None else [command, parameters]
 
@@ -64,9 +53,10 @@ def shell_command(command: str, parameters: Optional[Union[str, Iterable[str]]] 
             sys.stdout.flush()
 
     if (process.returncode != 0) and (process.returncode is not None):
-        raise ValueError(f"Error code {process.returncode} when running {command} {parameters} in ccs.")
+        raise ValueError(f"Error code {process.returncode} when running '{command} {parameters}'.")
 
     return ' '.join(full_shell_command), ''.join(output_lines)
+
 
 def mjd2date(mjd: float) -> datetime.datetime:
     """Returns the datetime for the given MJD date.
@@ -80,6 +70,7 @@ def date2mjd(date: datetime.datetime) -> float:
     """
     origin = datetime.datetime(1858, 11, 17)
     return  (date-origin).days + (date-origin).seconds/86400.0
+
 
 def fix_difmap_image(fitsimage: Union[str,Path], output_verify='ignore'):
     """When using Difmap 'select pi', the stokes parameter in the stored FITS image
@@ -95,11 +86,13 @@ def fix_difmap_image(fitsimage: Union[str,Path], output_verify='ignore'):
         print(f"WARNING: VerifyWarning: {e}")
         print("Continuing from here...")
 
+
 def space_available(path: Union[str, Path]) -> u.Quantity:
     """Returns the available space in the disk where the given path is located.
     """
     results = os.statvfs(path)
-    return (results.f_frsize*results.f_bavail*u.b).to(u.Gb)
+    return (u.Quantity(results.f_frsize*results.f_bavail, u.b)).to(u.Gb)
+
 
 def aips_exists() -> bool:
     """Checks in the AIPS environment is loaded in the system.

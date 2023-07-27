@@ -229,7 +229,8 @@ class Source(object):
 
     @property
     def model(self) -> Optional[Path]:
-        """Source model file (generated after imaging or other tasks and can be used for calibration).
+        """Source model file (generated after imaging or by other tasks;
+        it can be used for calibration).
         """
         return self._model
 
@@ -264,7 +265,8 @@ class Source(object):
 
     def __str__(self) -> str:
         if self.coordinates is not None:
-            return f"Source({self.name}, {self.type.name}, at {self.coordinates.to_string('hmsdms')})"
+            return f"Source({self.name}, {self.type.name}, " \
+                   f"at {self.coordinates.to_string('hmsdms')})"
         else:
             return f"Source({self.name}, {self.type.name}, unknown coordinates)"
 
@@ -440,9 +442,9 @@ class Sources(object):
         the internal variables (e.g. _username instead of username) and I want a better
         human-readable output.
         """
-        d = dict()
-        for ant in self.__iter__():
-            d['Antenna'] = ant.__dict__
+        d = list()
+        for source in self.__iter__():
+            d.append(source.json())
 
         return d
 
@@ -469,18 +471,22 @@ class Antennas(object):
     """
     def __init__(self, antennas: Optional[Iterable[Antenna]] = None):
         if antennas is not None:
-            self._antennas = antennas[:]
+            self._antennas = copy.deepcopy(list(antennas))
         else:
             self._antennas = []
 
-    def append(self, new_antenna: Antenna) -> NoReturn:
+        self._niter = -1
+
+
+    def append(self, new_antenna: Antenna):
         """Adds a new antenna to the collection of antennas.
 
         Note that this function and "add" are completely equivalent.
         """
         self.add(new_antenna)
 
-    def add(self, new_antenna: Antenna) -> NoReturn:
+
+    def add(self, new_antenna: Antenna):
         """Adds a new antenna to the collection of antennas.
 
         Note that this function and "add" are completely equivalent.
@@ -488,17 +494,20 @@ class Antennas(object):
         assert isinstance(new_antenna, Antenna)
         self._antennas.append(new_antenna)
 
+
     @property
     def names(self) -> List[str]:
         """Returns the name of the antenna
         """
         return [a.name for a in self._antennas]
 
+
     @property
-    def observed(self) -> List[tuple]:
+    def observed(self) -> List[str]:
         """Returns the antenna names that have data (have observed) in the observation
         """
         return [a.name for a in self._antennas if a.observed]
+
 
     @property
     def subbands(self):
@@ -506,40 +515,51 @@ class Antennas(object):
         """
         return [a.subbands for a in self._antennas if a.observed]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._antennas)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> Antenna:
         return self._antennas[self.names.index(key)]
 
     def __delitem__(self, key):
-        return self._antennas.remove(self.names.index(key))
+        return self._antennas.remove(self[key])
 
-    def __iter__(self):
-        return self._antennas.__iter__()
+    def __iter__(self) -> Iterable[Antenna]:
+        self._niter = -1
+        for ant in self._antennas:
+            yield ant
 
-    def __reversed__(self):
+
+    def __next__(self) -> Antenna:
+        if self._niter < self.__len__()-1:
+            self._niter += 1
+            return self._antennas[self._niter]
+
+        raise StopIteration
+
+
+    def __reversed__(self) -> list[Antenna]:
         return self._antennas[::-1]
 
-    def __contains__(self, key):
+    def __contains__(self, key) -> bool:
         return key in self.names
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.__repr__()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Antennas:\n" \
            f"([{', '.join([ant if ant in self.observed else '['+ant+']' for ant in self.names])})"
 
-    def json(self):
+    def json(self) -> list[dict]:
         """Returns a dict with all attributes of the object.
         I define this method to use instead of .__dict__ as the later only reporst
         the internal variables (e.g. _username instead of username) and I want a better
         human-readable output.
         """
-        d = dict()
+        d = list()
         for ant in self.__iter__():
-            d['Antenna'] = ant.__dict__
+            d.append({'name': ant.name, 'observed': ant.observed, 'subbands': ant.subbands})
 
         return d
 
@@ -564,6 +584,7 @@ class FreqSetup(object):
         """
         return self._n_subbands
 
+
     @property
     def channels(self) -> int:
         """Returns the number of channels per subband of the observation.
@@ -571,11 +592,13 @@ class FreqSetup(object):
         """
         return self._channels
 
+
     @property
     def frequency(self) -> u.Quantity:
         """Returns the central frequency of the observation, in a astropy.units.Quantity format.
         """
         return self._frequency.to(u.GHz)
+
 
     @property
     def bandwidth_per_subband(self) -> u.Quantity:
@@ -583,17 +606,21 @@ class FreqSetup(object):
         """
         return self._bandwidth_spw.to(u.MHz)
 
+
     @property
     def bandwidth(self) -> u.Quantity:
         """Returns the total bandwidth of the observation
         """
         return self._bandwidth_spw.to(u.MHz) * self.n_subbands
 
+
     @property
-    def frequency_range(self) -> tuple[u.Quantity, u.Quantity]:
-        """Returns the lowest and highest frequency observed.
+    def frequency_range(self) -> tuple:
+        """Returns the lowest and highest frequency observed as a tuple.
         """
-        return (self.frequency - self.bandwidth/2, self.frequency + self.bandwidth/2)
+        return ((self.frequency - self.bandwidth/2).to(u.GHz),
+                (self.frequency + self.bandwidth/2).to(u.GHz))
+
 
     def __init__(self, channels: int, n_subbands: int, central_frequency: Union[float, u.Quantity],
                  bandwidth_spw: Union[float, u.Quantity]):
@@ -607,38 +634,36 @@ class FreqSetup(object):
             - bandwidth_spw : float or astropy.units.Quantity
                 Total bandwidth for each subband. If no units are provided, Hz are assumed.
         """
-        assert isinstance(n_subbands, (int, np.int32, np.int64)) and n_subbands > 0, \
-            f"n_subbands {n_subbands} is not a positive integer as expected " \
-            f"(found type {type(n_subbands)})."
-        assert isinstance(channels, (int, np.int32, np.int64)), \
-            f"Chans {channels} is not an integer as expected (found type {type(channels)})."
-        assert isinstance(bandwidth_spw, float) or isinstance(bandwidth_spw, u.Quantity), \
-            f"Bandwidth {bandwidth_spw} is not a float or Quantity as expected " \
-            f"(found {type(bandwidth_spw)})."
+        if n_subbands <= 0:
+            raise ValueError("n_subbands (currently {n_subbands}) must be a positive integer")
+
         self._channels = int(channels)
         self._n_subbands = n_subbands
-        if isinstance(bandwidth_spw, float):
-            self._frequency = central_frequency*u.Hz
+
+        if isinstance(central_frequency, float):
+            self._frequency = u.Quantity(central_frequency, u.Hz)
         else:
             self._frequency = central_frequency
+
         if isinstance(bandwidth_spw, float):
-            self._bandwidth_spw = bandwidth_spw*1e-9*u.GHz
+            self._bandwidth_spw = u.Quantity(bandwidth_spw*1e-9, u.GHz)
         else:
             self._bandwidth_spw = bandwidth_spw
 
+
     def __iter__(self):
-        for key in ('n_subbands', 'channels', 'bandwidth_spw', 'frequencies'):
+        for key in ('n_subbands', 'channels', 'bandwidth_spw', 'frequency_range'):
             yield key, getattr(self, key)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.__repr__()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<FreqSetup>\n{self.frequency:.3f} central frequency.\n{self.n_subbands} x " \
                f"{self.bandwidth_per_subband.to(u.MHz):.1f} " \
                f"subbands. {self.channels} channels per subband."
 
-    def json(self):
+    def json(self) -> dict:
         """Returns a dict with all attributes of the object.
         I define this method to use instead of .__dict__ as the later only reporst
         the internal variables (e.g. _username instead of username) and I want a better
@@ -648,8 +673,6 @@ class FreqSetup(object):
         for key, val in self.__iter__():
             if isinstance(val, u.Quantity):
                 d[key] = val.to(u.Hz).value
-            elif isinstance(val, np.ndarray):
-                d[key] = list(val)
             else:
                 d[key] = val
 
@@ -668,8 +691,8 @@ class Importing(object):
         # TODO: LBA import in CASA?
         raise NotImplementedError
 
-    def evn_download(self, obsdate: str = None, projectcode: str = None, username: str = None,
-                     password: str = None):
+    def evn_download(self, obsdate: Optional[str] = None, projectcode: Optional[str] = None,
+                     username: Optional[str] = None, password: Optional[str] = None) -> bool:
         """Downloads the data files associated with the given EVN project.
         It will download the associated FITS-IDI files, and the associated .antab and .uvflg files.
 
@@ -708,22 +731,30 @@ class Importing(object):
             capi.tools.shell_command("wget", params)
             capi.tools.shell_command("md5sum", ["-c", f"{expname.lower()}.checksum"])
             # TODO: verify here that all files are OK!
-            capi.tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
-                                         f"pipe/{expname.lower()}.antab.gz"])
+            capi.tools.shell_command("wget",
+                                     [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
+                                      f"pipe/{expname.lower()}.antab.gz"])
             capi.tools.shell_command("gunzip", [f"{expname.lower()}.antab.gz"])
             # TODO: if ERROR 404: Not Found, then go for the _1, _2,...
-            capi.tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
-                                         f"pipe/{expname.lower()}.uvflg"])
+            capi.tools.shell_command("wget",
+                                     [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
+                                      f"pipe/{expname.lower()}.uvflg"])
             # TODO: this only if I need AIPS
-            capi.tools.shell_command("wget", [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
-                                         f"pipe/{expname.lower()}.tasav.FITS.gz"])
+            capi.tools.shell_command("wget",
+                                     [f"http://archive.jive.nl/exp/{expname.upper()}_{obsdate}/" \
+                                      f"pipe/{expname.lower()}.tasav.FITS.gz"])
             capi.tools.shell_command("gunzip", [f"{expname.lower()}.tasav.FITS.gz"])
         except ValueError as err:
-            rprint(f"[bold red]ERROR: likely you require credentials to download these data[/bold red]")
+            rprint(f"[bold red]ERROR: you may require credentials to download the data[/bold red]")
             rprint(f"[red]{err}[/red]")
 
+        return all(f.exists() for f in (Path(f"{expname.lower()}.antab"),
+                                               Path(f"pipe/{expname.lower()}.tasav.FITS"),
+                                               Path(f"pipe/{expname.lower()}.uvflg"))) \
+                    and (len(glob.glob(f"{expname.lower()}_*_1.IDI*")) > 0)
 
-    def get_obsdate_from_fitsidi(self):
+
+    def get_obsdate_from_fitsidi(self) -> dt.date:
         """Returns the observing epoch in datetime format as read from the FITS-IDI.
         """
         if self._ms.time.epoch is not None:
@@ -733,7 +764,7 @@ class Importing(object):
         a_fitsidi = p("1") if p("1").exists() else p("")
         assert a_fitsidi.exists()
         with fits.open(a_fitsidi) as hdu:
-            return dt.date.strptime(hdu[1].header['RDATE'], "%Y-%m-%d")
+            return dt.datetime.strptime(hdu[1].header['RDATE'], "%Y-%m-%d").date()
 
 
     def get_freq_from_fitsidi(self) -> u.Quantity:
@@ -804,9 +835,9 @@ class Importing(object):
             if not os.path.isfile(a_fitsidi):
                 raise FileNotFoundError(f"The file {a_fitsidi} could not be found.")
 
-        if capi.tools.space_available(self._ms.cwd) <= 1.55*3*u.kbit*int(subprocess.run(
-                                                       f"du -sc {' '.join(fitsidifiles)}", shell=True,
-                                                       capture_output=True).stdout.decode().split()[-2]):
+        if capi.tools.space_available(self._ms.cwd) <= u.Quantity(1.55*3, u.kbit)* \
+                    int(subprocess.run(f"du -sc {' '.join(fitsidifiles)}", shell=True,
+                                       capture_output=True).stdout.decode().split()[-2]):
             rprint("\n\n[bold red]There is no enough space in the computer to create " \
                    "the MS file and perform the data reduction[/bold red]")
             raise IOError("Not enough disk space to create the MS file.")
