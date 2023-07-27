@@ -2,7 +2,7 @@ import casatasks
 from pathlib import Path
 from typing import Optional, Iterable, NoReturn, List, Union, Tuple
 from rich import print as rprint
-import casa_pipeline as capi
+from .. import casa_pipeline as capi
 
 class Flagging(object):
     """Class that contains all tasks concerning flagging to the data that can be applied to
@@ -24,7 +24,7 @@ class Flagging(object):
                    else flagfile
 
         if not flagfile.exists():
-            rprint(f"[bold red]The flag file {flagfile} should exist but cannot be found.[/bold red]")
+            rprint(f"[bold red]The flag file {flagfile} should exist but was not found.[/bold red]")
             raise FileNotFoundError(f"The flagfile {flagfile} cannot be found.")
 
         results = casatasks.flagdata(vis=str(self._ms.msfile), mode='list', inpfile=str(flagfile),
@@ -57,6 +57,7 @@ class Flagging(object):
             edge_fraction : float [default = 0.1]
                 Fraction of channels at the edge of each subband that will be flagged to all data.
         """
+        assert self._ms.freqsetup is not None, "The FreqSetup should be known at this step"
         edge_channel = int(self._ms.freqsetup.channels/(100*edge_fraction))
         start = str(edge_channel - 1)
         end = str(self._ms.freqsetup.channels - edge_channel)
@@ -87,9 +88,9 @@ class Flagging(object):
                            flagbackup=False)
 
 
-    def tfcrop(self, datacolumn='data', field='', flagdimension='freqtime', timecutoff=6.0, freqcutoff=5.0,
-               ntime='scan', combinescans=True, timefit='line', freqfit='poly', extendflags=True, action='apply',
-               flagbackup=True, **kwargs):
+    def tfcrop(self, datacolumn='data', field='', flagdimension='freqtime', timecutoff=6.0,
+               freqcutoff=5.0, ntime='scan', combinescans=True, timefit='line', freqfit='poly',
+               extendflags=True, action='apply', flagbackup=True, **kwargs):
         """Runs flagdata with the tfcrop option.
         In principle it should work fine for EVN data as long as the data are already calibrated.
         """
@@ -100,14 +101,15 @@ class Flagging(object):
                            flagbackup=flagbackup, **kwargs)
 
 
-    def aoflagger(self, strategy_file: str = None):
+    def aoflagger(self, strategy_file: Optional[str] = None):
         """Runs the AOFlagger on the associated MS.
         If you have a costumized AOflagger strategy file, you can use it.
         """
         if strategy_file is None:
             capi.tools.shell_command("aoflagger", [str(self._ms.msfile)])
         else:
-            capi.tools.shell_command("aoflagger", ["-strategy", strategy_file, str(self._ms.msfile)])
+            capi.tools.shell_command("aoflagger",
+                                     ["-strategy", strategy_file, str(self._ms.msfile)])
 
 
     def check_unflagged_data(self):

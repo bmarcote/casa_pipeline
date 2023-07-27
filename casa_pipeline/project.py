@@ -27,7 +27,7 @@ from rich import progress
 import casatasks
 from casatools import msmetadata as msmd
 from casatools import table as tb
-import casa_pipeline as capi
+from .. import casa_pipeline as capi
 
 
 
@@ -197,12 +197,9 @@ class Project(object):
     @property
     def importdata(self) -> capi.obsdata.Importing:
     # def importdata(self):
-        #TODO: importing should also be a sub-class (network dependend)
+        #TODO: importing should also be a sub-class (observatory dependend)
         return self._importing
 
-    def __new__(cls, *args, **kwargs):
-        obj = super().__new__(cls, *args, **kwargs)
-        return obj
 
     def __init__(self, projectname: str, observatory: str = 'EVN', sci_package: str = 'CASA',
                  params: Optional[Union[dict, str, Path]] = None,
@@ -231,7 +228,8 @@ class Project(object):
             cwd : Path or str  [optional. Default = $PWD]
                 The default directory where the pipeline will run, search for and create the files.
         """
-        if (projectname != '') and (isinstance(projectname, str)):
+        print(f"projectname: '{projectname}'")
+        if (projectname == '') or (not isinstance(projectname, str)):
                raise ValueError("The project name needs to be a non-empty string.")
 
         self._projectname = projectname
@@ -299,17 +297,18 @@ class Project(object):
         self._freqsetup = None
         self._last_step = None
 
-        for a_src in self._args['sources']['target']:
-            self._sources.add(capi.Source(name=a_src, sourcetype=capi.SourceType.target,
-                                          coordinates=None))
+        if 'sources' in self._args:
+            for a_src in self._args['sources']['target']:
+                self._sources.add(capi.Source(name=a_src, sourcetype=capi.SourceType.target,
+                                              coordinates=None))
 
-        for a_src in self._args['sources']['phaseref']:
-            self._sources.add(capi.Source(name=a_src, sourcetype=capi.SourceType.calibrator,
-                                          coordinates=None))
+            for a_src in self._args['sources']['phaseref']:
+                self._sources.add(capi.Source(name=a_src, sourcetype=capi.SourceType.calibrator,
+                                              coordinates=None))
 
-        for a_src in self._args['sources']['fringefinder']:
-            self._sources.add(capi.Source(name=a_src, sourcetype=capi.SourceType.fringefinder,
-                                          coordinates=None))
+            for a_src in self._args['sources']['fringefinder']:
+                self._sources.add(capi.Source(name=a_src, sourcetype=capi.SourceType.fringefinder,
+                                              coordinates=None))
 
         for a_dir in (self.cwd, self.logdir, self.caldir, self.outdir):
             a_dir.mkdir(exist_ok=True)
@@ -323,9 +322,7 @@ class Project(object):
         # if self.exists_local_copy():
         #     self.load(self._local_copy)
 
-        assert 'reference_antenna' in self._args
-        self.refant = self._args['reference_antenna']
-
+        self.refant = self._args['reference_antenna'] if 'reference_antenna' in self._args else []
 
         if 'observatory' not in self._args:
             self._args['observatory'] = observatory
@@ -493,7 +490,7 @@ class Project(object):
         # self.summary()
 
 
-    def scan_numbers(self) -> list[int]:
+    def scan_numbers(self) -> np.ndarray:
         """Returns the list of scans that were observed in the observation.
         """
         m = msmd(str(self.msfile))
@@ -522,7 +519,7 @@ class Project(object):
             m.close()
 
 
-    def antennas_in_scans(self, scanno: list[int]) -> list[list[str]]:
+    def antennas_in_scans(self, scanno: Union[list[int], np.ndarray]) -> list[list[str]]:
         """Returns a list with all antennas that observed each given scan.
         """
         m = msmd(str(self.msfile))
@@ -547,7 +544,6 @@ class Project(object):
         all_scans = self.scan_numbers()
         scan_list = self.antennas_in_scans(all_scans)
         ant_list = {ant: [] for ant in self.antennas.names}
-        # TODO: check that this actually provides the expected result!
         for ant in ant_list:
             for i,scan  in enumerate(scan_list):
                 if ant in scan:
@@ -556,7 +552,7 @@ class Project(object):
         return ant_list
 
 
-    def scans_with_source(self, source_name: str) -> list[int]:
+    def scans_with_source(self, source_name: str) -> np.ndarray:
         """Returns a list with the numbers of the scans where the given source was observed.
         """
         m = msmd(str(self.msfile))
@@ -569,10 +565,9 @@ class Project(object):
             m.close()
 
 
-    def times_for_scans(self, scanno: list[int]) -> list:
+    def times_for_scans(self, scanno: Union[list[int], np.ndarray]) -> np.ndarray:
         """Returns the time for the specified scan number.
         """
-        # TODO: check and update what is the returned time of the function
         if len(scanno) == 0:
             raise ValueError("There should be at least one scan to check in the list.")
 
@@ -581,12 +576,13 @@ class Project(object):
             if not m.open(str(self.msfile)):
                 raise ValueError(f"The MS file {self.msfile} could not be openned.")
 
-            return m.timesforscans(scanno)
+            times_casa: np.ndarray = m.timesforscans(scanno)
+            return dt.datetime(1858, 11, 17, 0, 0, 2) + times_casa*dt.timedelta(seconds=1)
         finally:
             m.close()
 
 
-    def times_for_scan(self, scanno: int) -> list:
+    def times_for_scan(self, scanno: int) -> np.ndarray:
         """Returns the time for the specified scan number.
         """
         m = msmd(str(self.msfile))
@@ -594,7 +590,8 @@ class Project(object):
             if not m.open(str(self.msfile)):
                 raise ValueError(f"The MS file {self.msfile} could not be openned.")
 
-            return m.timesforscan(scanno)
+            time_casa = m.timesforscan(scanno)
+            return dt.datetime(1858, 11, 17, 0, 0, 2) + time_casa*dt.timedelta(seconds=1)
         finally:
             m.close()
 
@@ -709,8 +706,9 @@ class Project(object):
                     splits[a_source] = Project(ms_name.replace('.ms', ''), cwd=self.cwd,
                                           params=self.params, logging_level=self._logging_level)
                     self.splits[a_source].append(splits[a_source])
-                except: #TODO: which error is when it does not find a source?
+                except RuntimeError as e:
                     rprint(f"[bold red]Could not create a split MS file for {a_source}.[/bold red]")
+                    rprint(f"[red]{e}[/red]")
 
             return splits
 

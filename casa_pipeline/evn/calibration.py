@@ -18,7 +18,7 @@ from casatasks.private import tec_maps
 from casatools import table as tb
 from casatools import componentlist as cl
 # from casatools import msmetadata as msmd
-import casa_pipeline as capi
+from ... import casa_pipeline as capi
 
 _FILE_DIR = os.path.dirname(os.path.realpath(__file__))
 

@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import casa_pipeline as capi
+from .. import casa_pipeline as capi
 
 # TODO: I will need to add the headermatplotlib style
 
@@ -24,7 +24,7 @@ class Jplotter(object):
         yield f"ms {str(self._ms.msfile)}"
         yield "indexr"
 
-    def autocorr(self, sources: list = None, scans: list = None):
+    def autocorr(self, sources: Optional[list] = None, scans: Optional[list] = None):
         """It will create auto-correlation plots for the given sources.
 
         sources : list

@@ -27,7 +27,7 @@ import casatasks
 from casatools import table as tb
 from casa_pipeline.casavlbitools import fitsidi
 from casa_pipeline.casa_pipeline import check_antab_idi
-import casa_pipeline as capi
+from .. import casa_pipeline as capi
 
 
 # Because as far as I know CASA folks do not have a straight away to get this simple information
@@ -76,72 +76,65 @@ class ObsEpoch(object):
     and the time range (or duration) of the observation.
     """
     @property
-    def epoch(self) -> dt.date:
+    def epoch(self) -> Optional[dt.date]:
         """Returns the epoch at which the observations were conducted, in datetime.time format.
         """
-        if self._epoch is None:
-            raise ValueError("The epoch of the observation has not been initialized yet.")
-
         return self._epoch
 
 
     @property
-    def ymd(self) -> str:
+    def ymd(self) -> Optional[str]:
         """Returns the epoch at the (start of) observations, in YYMMDD format.
         """
-        return self.epoch.strftime('%y%m%d')
+        return self.epoch.strftime('%y%m%d') if self.epoch is not None else None
 
 
     @property
-    def mjd(self) -> float:
+    def mjd(self) -> Optional[float]:
         """Returns the Modifyed Julian Day (MJD) relative to the start of the observation.
         """
-        if self._starttime is not None:
+        if self.starttime is not None:
             return float(capi.tools.date2mjd(self.starttime))
+        elif self.epoch is not None:
+            return float(capi.tools.date2mjd(dt.datetime(*self.epoch.timetuple()[:6])))
 
-        return float(capi.tools.date2mjd(dt.datetime(*self.epoch.timetuple()[:6])))
+        return None
 
 
     @property
-    def doy(self) -> int:
+    def doy(self) -> Optional[int]:
         """Returns the day of the year (DOY) related to the start of the observation.
         """
-        return int(self.epoch.strftime('%j'))
+        return int(self.epoch.strftime('%j')) if self.epoch is not None else None
 
 
     @property
-    def starttime(self) -> dt.datetime:
+    def starttime(self) -> Optional[dt.datetime]:
         """Returns the start time of the observation in datetime format.
         """
-        if self._starttime is None:
-            raise ValueError("The 'start_datetime' has not been initialized yet.")
-
         return self._starttime
 
 
     @starttime.setter
     def starttime(self, start_datetime: dt.datetime):
-        if self._endtime is not None:
+        if self.endtime is not None:
             assert (self.endtime - start_datetime) > dt.timedelta(days=0), \
                    "Starting time needs to be earlier than ending time."
 
         self._starttime = start_datetime
-        self._epoch = self.starttime.date()
+        self._epoch = start_datetime.date()
 
 
     @property
-    def endtime(self) -> dt.datetime:
+    def endtime(self) -> Optional[dt.datetime]:
         """Returns the ending time of the observation in datetime format.
         """
-        if self._endtime is None:
-            raise ValueError("The 'end_datetime' has not been initialized yet.")
-
         return self._endtime
 
 
     @endtime.setter
     def endtime(self, end_datetime: dt.datetime):
-        if self._starttime is not None:
+        if self.starttime is not None:
             assert (end_datetime - self.starttime) > dt.timedelta(days=0), \
                    "Ending time needs to be later than starting time."
 
@@ -149,12 +142,9 @@ class ObsEpoch(object):
 
 
     @property
-    def duration(self) -> u.Quantity:
-        if None in (self._starttime, self._endtime):
-            raise ValueError("The 'end_datetime' and/or 'start_datetime' have not " \
-                             "been initialized yet.")
-
-        return ((self.endtime - self.starttime).total_seconds()*u.s).to(u.hour)
+    def duration(self) -> Optional[u.Quantity]:
+        return ((self.endtime - self.starttime).total_seconds()*u.s).to(u.hour) \
+                if None not in (self.endtime, self.starttime) else None
 
 
     def __init__(self, start_datetime: Optional[dt.datetime] = None,
@@ -415,11 +405,17 @@ class Sources(object):
     def __len__(self):
         return len(self._sources)
 
-    def __getitem__(self, key):
-        return self._sources[self.names.index(key)]
+    def __getitem__(self, key: Union[int, str]):
+        if isinstance(key, int):
+            return self._sources[key]
+        else:
+            return self._sources[self.names.index(key)]
 
-    def __delitem__(self, key):
-        return self._sources.remove(self[key])
+    def __delitem__(self, key: Union[int, str]):
+        if isinstance(key, int):
+            return self._sources.remove(self[key])
+        else:
+            return self._sources.remove(self[key])
 
     def __iter__(self):
         return self._sources.__iter__()

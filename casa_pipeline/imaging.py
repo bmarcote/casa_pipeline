@@ -1,5 +1,5 @@
-
-import casa_pipeline as capi
+from typing import Optional, Union
+from .. import casa_pipeline as capi
 
 class Imaging(object):
     """Defines all imaging tasks that can run over a Ms object
@@ -10,12 +10,12 @@ class Imaging(object):
     def tclean(self):
         pass
 
-    def wsclean(self, parameters: str = None):
+    def wsclean(self, parameters: Optional[str] = None):
         if parameters is None:
-            capi.tools.shell_command("wsclean", [self._ms.params['imaging']['wsclean'].split(' '),
+            capi.tools.shell_command("wsclean", [*self._ms.params['imaging']['wsclean'].split(' '),
                                                  str(self._ms.msfile)])
         else:
-            capi.tools.shell_command("wsclean", [parameters.split(' '), str(self._ms.msfile)])
+            capi.tools.shell_command("wsclean", [*parameters.split(' '), str(self._ms.msfile)])
 
     def import_difmap(self, fitsfile = str):
         """Imports a Difmap image to CASA format
