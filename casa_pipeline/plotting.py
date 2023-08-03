@@ -111,10 +111,10 @@ class Plotting(object):
             src_scans = self._ms.scans_with_source(a_src)
             if len(src_scans) > 0:
                 for a,ant in enumerate(self._ms.antennas.names):
-                    if len(ants_scans[ant]) > 0:
-                        x = self._ms.times_for_scans(np.intersect1d(ants_scans[ant], src_scans))
-                        t = (dt.datetime(1858, 11, 17, 0, 0, 2) + x*dt.timedelta(seconds=1))
-                        ax.scatter(x=t, y=np.ones_like(t)*a, s=1, color=cmap(s), rasterized=True,
+                    scans_with_src = np.intersect1d(ants_scans[ant], src_scans)
+                    if len(scans_with_src) > 0:
+                        x = self._ms.times_for_scans(scans_with_src)
+                        ax.scatter(x=x, y=np.ones_like(x)*a, s=1, color=cmap(s), rasterized=True,
                                    label=a_src if a == 0 else None)
 
 

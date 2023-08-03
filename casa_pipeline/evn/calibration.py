@@ -941,7 +941,7 @@ class Aips(object):
         if ('calibration' in self._ms.params) and \
                                 ('do_ionospheric' in self._ms.params['calibration']):
             if self._ms.params['calibration']['do_ionospheric'] == "default":
-                if self._ms.freqsetup.frequency is not None:
+                if self._ms.freqsetup is not None:
                     if self._ms.freqsetup.frequency < 6*u.GHz:
                         cmd += ["--iono"]
                 else:
@@ -997,7 +997,8 @@ class Aips(object):
         return splits
 
 
-    def selfcal_with_difmapimage(self, fitsimage: str, aipsno: Optional[int] = None):
+    def selfcal_with_difmapimage(self, fitsimage: str, aipsno: Optional[int] = None,
+                                 solmode: str = 'ap', solint: float = 0):
         """Imports a FITS image into AIPS.
         """
         fitsimage = Path(fitsimage)

@@ -10,6 +10,10 @@ The CASA Pipeline (CAPI) is a [CASA](http://casa.nrao.edu)-based higher-level la
 This is a quite personal project which will be completely focused on the calibration of data from the European VLBI Network ([EVN](https://evlbi.org)) and from the Giant Metrewave Radio Telescope [GMRT](http://gmrt.ncra.tifr.res.in).
 
 
+                                                                                                                          ## Why CAPI?
+
+CASA was meant to be a
+
 **CAPI has the following goals:**
 - Simplify the user interaction layer with CASA to make it more dynamic and avoid command repetitions within a single session.
 - Use the default and more optimized approach for data reduction for the different facilities, instead of a fully manual step-by-step approach.

@@ -242,7 +242,8 @@ def calib(uvdata: AIPSUVData, refant: str, calsour: list = [''],
           smooth: list = [0, 0, 0], in2data: Optional[AIPSImage] = None, invers: int = 0,
           ncomp: list = [0], flux: float = 0.0, nmaps: int = 1, cmethod: str = 'dft',
           cmodel: str = 'comp', solint: float = 0.0, aparm: list = [2, 0, 1, 0, 0, 3, 3],
-          doflag: int = 1, soltype: str = 'L1R', normaliz: int = 6, snver: int = 0):
+          doflag: int = 1, soltype: str = 'L1R', normaliz: int = 6, snver: int = 0,
+          solmode: str = 'a&p'):
     calib = AIPSTask('calib')
     calib.indata = uvdata
     if in2data is not None:
@@ -269,6 +270,8 @@ def calib(uvdata: AIPSUVData, refant: str, calsour: list = [''],
     calib.nmaps = nmaps
     calib.cmethod = cmethod
     calib.cmodel = cmodel
+    assert solmode.upper() in ('A&P', 'P', 'P!A', 'GCON')
+    calib.solmode = solmode
     calib.solint = solint
     calib.aparm[1:] = aparm
     calib.doflag = doflag
@@ -495,7 +498,8 @@ def main_calibration(aipsid: int, projectname: str,
 
 
 def selfcalibration(aipsid: int, projectname: str, refant: list, imagefile: str, target: list,
-                    phaseref: Optional[list] = None, calsour: str = None, solint: float = 0.0):
+                    phaseref: Optional[list] = None, calsour: str = None, solmode: str = 'a&p',
+                    solint: float = 0.0, soltype: str = 'L1R', **kwargs):
     AIPS.userno = aipsid
      # Guesses the source name from the image file to import
     uvimage = None
@@ -527,7 +531,8 @@ def selfcalibration(aipsid: int, projectname: str, refant: list, imagefile: str,
     while AIPSUVData(uvimage.name, "SPLIT", 1, uvsplit.seq + 1).exists():
         uvsplit = AIPSUVData(uvimage.name, "SPLIT", 1, uvsplit.seq + 1)
 
-    _ = calib(uvsplit, in2data=uvimage, refant=refant, calsour=[uvimage.name])
+    _ = calib(uvsplit, in2data=uvimage, refant=refant[0], calsour=[uvimage.name], solmode=solmode,
+              solint=solint, soltype=soltype, **kwargs)
     if uvimage.name in phaseref:
         for a_target in target:
             target_split = AIPSUVData(a_target, "SPLIT", 1, 1)
