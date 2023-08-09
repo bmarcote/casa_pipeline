@@ -2,12 +2,15 @@
 import sys
 import copy
 import glob
+import string
 import logging
 import argparse
 import subprocess
 import functools
 from pathlib import Path
 import datetime as dt
+import numpy as np
+from astropy.io import fits
 from typing import Optional, Union
 from rich import box, text
 from rich.table import Table
@@ -28,11 +31,63 @@ __version__ = "1.0-dev1"
 def log(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        logging.debug(f"{func.__name__}({args}{kwargs})")
+        message = f"{func.__name__}("
+        for arg in args:
+            message += "\n    "
+            if isinstance(arg, AIPSUVData):
+                message += f"UVData({arg.name}, {arg.klass}, {arg.seq})"
+            elif isinstance(arg, AIPSImage):
+                message += f"Image({arg.name}, {arg.klass}, {arg.seq})"
+            else:
+                message += str(arg)
+
+        messval = ""
+        for kwarg, kwval in kwargs.items():
+            if isinstance(kwval, AIPSUVData):
+                messval += f"UVData({kwval.name}, {kwval.klass}, {kwval.seq})"
+            elif isinstance(kwval, AIPSImage):
+                messval += f"Image({kwval.name}, {kwval.klass}, {kwval.seq})"
+            else:
+                messval += str(kwval)
+
+            message += "\n    " + f"{kwarg} = {kwval}"
+        message += ")\n"
+        logging.debug(message)
         return func(*args, **kwargs)
 
     return wrapper
 
+def aipsno_from_project(projectname: str):
+    """Follows a personal way to get an AIPS no from EVN experiments which is:
+    for XXAAAB (e.g. EM123C), it takes the numeric part (123) and the epoch is
+    converted to a number following the alphabet, so the resulting AIPS no is 1233.
+
+    Otherwise it returns 101.
+    """
+    alphabet = list(string.ascii_lowercase)
+    if projectname[2:5].isnumeric():
+        aipsno = projectname[2:5]
+        if len(projectname) == 6:
+            aipsno += str(alphabet.index(projectname[5].lower()) + 1)
+    else:
+        aipsno = '101'
+
+    return int(aipsno)
+
+
+def fix_difmap_image(fitsimage: Union[str, Path], output_verify='ignore'):
+    """When using Difmap 'select pi', the stokes parameter in the stored FITS image
+    is unexpected for both AIPS and CASA. This script fixes the metadata in the file
+    """
+    try:
+        with fits.open(fitsimage, mode='update') as ffile:
+            if 'CRVAL4' in ffile[0].header:
+                if -9.0001 < ffile[0].header['CRVAL4'] < -8.999:
+                    ffile[0].header['CRVAL4'] = 1.0
+                    ffile.flush(output_verify=output_verify)
+    except fits.VerifyError as e:
+        print(f"WARNING: VerifyWarning: {e}")
+        print("Continuing from here...")
 
 
 def get_antenna_number(uvdata: AIPSUVData, antenna_name: str) -> int:
@@ -139,7 +194,7 @@ def zap_all(disk: int = 0) -> bool:
 @log
 def fitld(projectname: str, datain: str, ncount: int = 1, doconcat: int = 1,
           outclass: str = "UVDATA", outseq: int = 1, digicor=-1, douvcomp: int = -1,
-          clint: float = 0.25, replace=True, optype: str = 'UV'):
+          clint: float = 0.25, replace=True, optype: str = 'UV') -> Union[AIPSUVData, AIPSImage]:
     """Imports the associated FITS-IDI or UVFITS from a given project into AIPS.
     Note that one and only one of the 'fitsidifiles' or 'uvfits; parameters needs to be provided.
 
@@ -152,7 +207,7 @@ def fitld(projectname: str, datain: str, ncount: int = 1, doconcat: int = 1,
             UVFITS file to be imported.
 
     Returns
-        - uvdata : AIPSUVData
+        - uvdata : AIPSUVData or AIPSImage
             AIPSUVData that will be created from the imported data. If exists, it will be replaced.
     """
     if optype == 'UV':
@@ -178,7 +233,7 @@ def fitld(projectname: str, datain: str, ncount: int = 1, doconcat: int = 1,
     fitld.digicor = digicor
     fitld.doconcat = doconcat
     fitld.ncount = ncount
-    fitld.datain = datain
+    fitld.datain = str(Path(datain).absolute())
     fitld()
     return uvdata
 
@@ -358,8 +413,8 @@ def calib(uvdata: AIPSUVData, refant: list, calsour: list = [''],
           smooth: list = [0, 0, 0], in2data: Optional[AIPSImage] = None, invers: int = 0,
           ncomp: list = [0], flux: float = 0.0, nmaps: int = 1, cmethod: str = 'dft',
           cmodel: str = 'comp', solint: float = 0.0, aparm: list = [2, 0, 1, 0, 0, 3, 3],
-          doflag: int = 1, soltype: str = 'L1R', normaliz: int = 6, snver: int = 0,
-          solmode: str = 'a&p'):
+          doflag: int = 1, soltype: str = 'L1R', normaliz: int = 0, snver: int = 0,
+          solmode: str = 'a&p', cparm: list = [0, 2, 0]):
     calib = AIPSTask('calib')
     calib.indata = uvdata
     if in2data is not None:
@@ -390,6 +445,7 @@ def calib(uvdata: AIPSUVData, refant: list, calsour: list = [''],
     calib.solmode = solmode
     calib.solint = solint
     calib.aparm[1:] = aparm
+    calib.cparm[1:] = cparm
     calib.doflag = doflag
     calib.soltype = soltype
     calib.normaliz = normaliz
@@ -401,7 +457,7 @@ def calib(uvdata: AIPSUVData, refant: list, calsour: list = [''],
 @log
 def splat(uvdata: AIPSUVData, sources: list = [''], bif: int = 0, eif: int = 0, bchan: int = 0,
           echan: int = 0, docal: int = 1, gainuse: int = 0, flagver: int = 0, bpver: int = 0,
-          doband: int = 1, aparm: list = [0], stokes: str = '', #ichansel: list = [[0, 0, 0, 0]],
+          doband: int = 1, aparm: list = [0], stokes: str = '', ichansel: list = [0, 0, 0, 0],
           channel: int = 0, chinc: int = 1, solint: int = 0):
     splat = AIPSTask('splat')
     splat.indata = uvdata
@@ -418,7 +474,7 @@ def splat(uvdata: AIPSUVData, sources: list = [''], bif: int = 0, eif: int = 0, 
     splat.aparm[1:] = aparm
     splat.stokes = stokes
     # TODO: somehow this is not accepting a [0], nor [0, 0,]... Maybe now that is [[], []]
-    # splat.ichansel[1:] = ichansel
+    splat.ichansel[1][1:] = ichansel
     splat.channel = channel
     splat.chinc = chinc
     splat.solint = solint
@@ -543,7 +599,7 @@ def quack(uvdata: AIPSUVData, stokes: str = '', bif: int = 0, eif: int = 0,
 def fittp(uvdata: Union[AIPSUVData, AIPSImage], dataout: str):
     fittp = AIPSTask('fittp')
     fittp.indata = uvdata
-    fittp.dataout = dataout
+    fittp.dataout = str(Path(dataout).absolute())
     fittp()
 
 
@@ -738,6 +794,10 @@ def importdata(projectname: str, disk: int = 1, replace: bool = True,
         if not uvtasav.exists():
             uv = fitld(projectname.upper(), datain=fitsidifiles, outclass="UVDATA",
                        replace=replace, doconcat=1, ncount=ncount, digicor=-1, douvcomp=1)
+            if not Path(f"{projectname.lower()}.tasav.FITS").exists():
+                rprint(f"\n\n[bold red]The file {projectname.lower()}.tasav.FITS should " \
+                       "exist but is not found[/bold red]")
+                sys.exit(1)
             uvtasav = fitld(projectname.upper(), datain=f"{projectname.lower()}.tasav.FITS",
                             outclass="TASAV", replace=replace, doconcat=-1, ncount=1,
                             digicor=-1, douvcomp=1)
@@ -839,24 +899,6 @@ def main_calibration(projectname: str, refant: list, solint: float,
 
 
 
-
-# TODO: PUT THIS INSIDE THE MAIN PROGRAM            , avgchan_split: bool = True
-    # for a_source in list(set(target + bpsour + calsour)):
-    #     uv_src = AIPSUVData(a_source, "SPLIT", 1, 1)
-    #     if uv_src.exists():
-    #         uv_src.zap()
-    #
-    # split(uvdata, sources=[''], bchan=bchan, echan=echan, gainuse=highest_table(uvdata, "CL"),
-    #       doband=1, bpver=highest_table(uvdata, "BP"), aparm=[2 if avgchan_split else 0, 0, 0, 1])
-    # uvsplits = []
-    # for a_source in list(set(target + bpsour + calsour)):
-    #     uv_src = AIPSUVData(a_source, "SPLIT", 1, 1)
-    #     if uv_src.exists():
-    #         uvsplits.append(uv_src)
-    #
-    # return uvsplits
-
-
 # def selfcalibration_on_splits(aipsid: int, projectname: str, refant: list, imagefile: str, target: list,
 #                     phaseref: Optional[list] = None, calsour: Optional[str] = None,
 #                     solmode: str = 'a&p', solint: float = 0.0, soltype: str = 'L1R', **kwargs):
@@ -933,8 +975,8 @@ def main_calibration(projectname: str, refant: list, solint: float,
 
 def selfcalibration(projectname: str, refant: list, imagefile: str, calsour: str,
                     sources: list[str], solmode: str = 'a&p', solint: float = 0.0,
-                    soltype: str = 'L1R', weightit: int = 1,
-                    minsnr: int = 3, avgpol: bool = False, avgspw: bool = False, minant: int = 3):
+                    soltype: str = 'L1R', weightit: int = 1, normaliz: int = 1,
+                    minsnr: int = 3, avgpol: bool = False, avgspw: bool = False, minant: int = 4):
     """Runs a cycle of self-calibration on the UVDATA with the specified parameters.
     """
     uvdata: AIPSUVData = AIPSUVData(projectname.upper(), "UVDATA", 1, 1)
@@ -944,20 +986,27 @@ def selfcalibration(projectname: str, refant: list, imagefile: str, calsour: str
     # Guesses the source name from the image file to import
     uvimage: AIPSImage = AIPSImage(calsour, 'PICLN', 1, 1)
     if not uvimage.exists():
+        # fixing the 'pa' stokes from Difmap
+        fix_difmap_image(imagefile)
         uvimage = fitld(calsour, datain=imagefile, doconcat=-1, outclass='PICLN',
-                        replace=True, ncount=1, digicor=-1)
-
+                        replace=True, ncount=1, digicor=-1, optype='IM')
+        # if uvimage.header['crval'][uvimage.header['ctype'].index('STOKES')] == -9:
+        #     new_crval = uvimage.header['crval']
+        #     new_crval[uvimage.header['ctype'].index('STOKES')] = 1
+        #     uvimage.header.update({'crval', new_crval})
     cltable: int = highest_table(uvdata, 'CL')
+    bptable: int = highest_table(uvdata, 'BP')
     sntable: int = highest_table(uvdata, 'SN')
 
-    calib(uvdata, in2data=uvimage, refant=refant, calsour=[calsour], solmode=solmode,
+    calib(uvdata, in2data=uvimage, refant=refant, calsour=[calsour], solmode=solmode, docalib=1,
           solint=solint, soltype=soltype, gainuse=cltable, snver=sntable + 1, weightit=weightit,
-          aparm=[minant, 0, 1 if avgpol else 0, 1 if avgspw else 0, 3, minsnr])
+          aparm=[minant, 0, 1 if avgpol else 0, 0, 1 if avgspw else 0, 3, minsnr],
+          normaliz=normaliz, cparm=[0, 1, 0], doband=1 if bptable > 0 else -1, bpver=bptable)
     clcal(uvdata, calsour=[calsour], sources=[calsour], refant=refant, snver=sntable + 1,
           gainver=cltable, gainuse=cltable + 1, opcode='CALI', interpol='self')
     clcal(uvdata, calsour=[calsour], sources=[s for s in sources if s != calsour],
           refant=refant, snver=sntable + 1, gainver=cltable, gainuse=cltable + 1, opcode='CALI',
-          interpol='ambg')
+          interpol='ambg', samptype='EXP')
 
 
 def split_sources(projectname: str, sources: Optional[list[str]] = None, bchan: int = 0,
@@ -967,29 +1016,33 @@ def split_sources(projectname: str, sources: Optional[list[str]] = None, bchan: 
     """
     uvdata: AIPSUVData = AIPSUVData(projectname.upper(), "UVDATA", 1, 1)
     splits = {}
+
     for a_src in sources if sources is not None else uvdata.sources:
-        splits[a_src] = AIPSUVData(a_src, "SPLIT", 1, 1)
-        while AIPSUVData(a_src, "SPLIT", 1, splits[a_src].seq + 1).exists():
-            splits[a_src] = AIPSUVData(a_src, "SPLIT", 1, splits[a_src].seq + 1)
+        if replace:
+            temp_uvdata = AIPSUVData(a_src, "SPLIT", 1, 1)
+            while temp_uvdata.exists():
+                temp_uvdata.zap(force=True)
+                temp_uvdata = AIPSUVData(a_src, "SPLIT", 1, temp_uvdata.seq + 1)
 
-        if splits[a_src].exists() and replace:
-            splits[a_src].zap(force=True)
-        elif splits[a_src].exists() and not replace:
-            splits[a_src] = AIPSUVData(a_src, "SPLIT", 1, splits[a_src].seq + 1)
+            splits[a_src] = AIPSUVData(a_src, "SPLIT", 1, 1)
+        else:
+            splits[a_src] = AIPSUVData(a_src, "SPLIT", 1, 1)
+            while splits[a_src].exists():
+                splits[a_src] = AIPSUVData(a_src, "SPLIT", 1, splits[a_src].seq + 1)
 
-        split(uvdata, sources=sources if sources is not None else uvdata.sources,
-              bchan=bchan, echan=echan, docal=1, gainuse=highest_table(uvdata, 'CL'),
-              doband=1 if highest_table(uvdata, 'BP') > 0 else -1,
-              bpver=highest_table(uvdata, 'BP'),
-              aparm=[2 if avgchan == -1 else 1, avgtime, 0, 1, 0, 1])
+    split(uvdata, sources=sources if sources is not None else uvdata.sources,
+          bchan=bchan, echan=echan, docal=1, gainuse=highest_table(uvdata, 'CL'),
+          doband=1 if highest_table(uvdata, 'BP') > 0 else -1,
+          bpver=highest_table(uvdata, 'BP'),
+          aparm=[2 if avgchan == -1 else 1, avgtime, 0, 1, 0, 1])
 
-        for a_src, a_split in splits.items():
-            if a_split.exists():
-                outfile = Path(f"{projectname}.{a_src}.SPLIT.{a_split.seq}.UVFITS")
-                outfile.unlink(missing_ok=True)
-                fittp(a_split, str(outfile))
-            else:
-                rprint(f"[yellow]A SPLIT file for {a_src} was not generated.[/yellow]")
+    for a_src, a_split in splits.items():
+        if a_split.exists():
+            outfile = Path(f"{projectname}.{a_src}.SPLIT.{a_split.seq}.UVFITS")
+            outfile.unlink(missing_ok=True)
+            fittp(a_split, str(outfile))
+        else:
+            rprint(f"[yellow]A SPLIT file for {a_src} was not generated.[/yellow]")
 
 
 def transfercal(projectname: str, uvfile: str, source: list, refant: list,
@@ -1090,9 +1143,12 @@ if __name__ == '__main__':
                         help="Epoch of observation in YYMMDD format. Only needed if the data are downloaded.")
     parser.add_argument('--bchan', type=int, default=0, help="BCHAN parameter for all calibration and split.")
     parser.add_argument('--echan', type=int, default=0, help="ECHAN parameter for all calibration and split.")
+    parser.add_argument('--fchan', type=float, default=None,
+                        help="Sets BCHAN/ECHAN parameters to led out the fraction " \
+                        "of edge channels given by this (e.g. 0.1 will flag 10% of the edge channels.")
     parser.add_argument('--minsnr', type=int, default=3,
                         help="Minimum SNR during the global fringe and/or self-calibration.")
-    parser.add_argument('--replace', default=True, action="store_false",
+    parser.add_argument('--replace', default=False, action="store_true",
                         help="If already exists, it will overwrite the existing files in AIPS.")
     parser.add_argument('--quack', type=str, default=None, help="Antennas and time (in seconds) to flag " \
             "at the beginning of each scan, in the form '{ant1}:{int1};{ant2}:{int2}': list of pairs " \
@@ -1134,10 +1190,12 @@ if __name__ == '__main__':
                         help="Name of the source to use as model and to calibrate the data.")
     pars_sc.add_argument('--sc_target', type=str, default=None,
                         help="Sources to transfer the calibration solutions computed during self-calibration.")
+    pars_sc.add_argument('--sc_avgpol', default=False, action="store_true",
+                        help="Averages the two polarizations to compute the self-calibration.")
     pars_sc.add_argument('--sc_solmode', type=str, default='A&P:5',
                         help="Solution mode for the self-calibration (if selected): 'P' only phase,." \
-                                "'A&P' amplitude and phase, and integration time (both values separated by ':' . \
-                                If multiple runs of selfcal are desired, then it can be a ';' separated list.")
+                             "'A&P' amplitude and phase, and integration time (both values separated by ':'. " \
+                             "If multiple runs of selfcal are desired, then it can be a ';' separated list.")
     # pars_sc.add_argument('--transfer', type=str, default=None,
     #                     help="Transfers the calibration to a new data set and splits the target "
     #                          "sources. Useful e.g. in multiple-pass observations (with e.g. "
@@ -1145,13 +1203,20 @@ if __name__ == '__main__':
     #                          "It needs to be the AIPS name to import the file as provided to FITLD")
 
     args = parser.parse_args()
+    logging.basicConfig(filename=args.log, filemode='w', level=logging.DEBUG, format="%(levelname)s: %(message)s")
+    logging.info(f"--- Starting ParselTongue reduction on {dt.datetime.now().strftime('%d %b %Y  %H:%M')}\n\n")
+
+    if args.aipsid is None:
+        args.aipsid = aipsno_from_project(args.projectname)
 
     assert (args.aipsid >= 100) and (args.aipsid < 100000)
     AIPS.userno = args.aipsid
     assert len(args.projectname) <= 6
 
     # Are the data already available?
-    if glob.glob(f"{args.projectname.lower()}*IDI*") == 0:
+    if glob.glob(f"{args.projectname.lower()}*IDI*") == 0 and \
+            (glob.glob(f"{args.fitsidi}*") == 0 if args.fitsidi is not None else True) and \
+            (glob.glob(args.uvfits) == 0 if args.uvfits is not None else True):
         if args.obsdate is None:
             rprint("\n\n[bold red]No FITS-IDI data found. To download the data --obsdate must be set[/bold red]")
             sys.exit(1)
@@ -1161,7 +1226,7 @@ if __name__ == '__main__':
 
 
     if args.initial:
-        fitsidifiles = args.fitsidifiles if (args.fitidifiles, args.uvfits).count(None) < 2 \
+        fitsidifiles = args.fitsidi if (args.fitsidi, args.uvfits).count(None) < 2 \
                        else f"{args.projectname.lower()}_1_1.IDI"
         importdata(args.projectname, args.disk, args.replace, fitsidifiles, args.uvfits)
 
@@ -1174,7 +1239,16 @@ if __name__ == '__main__':
         assert ':' in args.quack, "Wrong format. It needs to be 'ant1:solint_s;ant2:solint_s;...'"
         for quack_pair in args.quack.split(';'):
             quack_ant, quack_time = quack_pair.split(':')
-            quack(uvdata, antennas=quack_ant, begcut_min=float(quack_time)/60.0)
+            quack(uvdata, antennas=[quack_ant], begcut_min=float(quack_time)/60.0)
+
+    nchans = uvdata.header['naxis'][uvdata.header['ctype'].index('FREQ')]
+    if args.fchan is not None:
+        args.bchan = int(np.floor(nchans*args.fchan))
+        args.echan = int(np.ceil(nchans*(1 - args.fchan)))
+
+    if (args.bchan > 0) and (args.echan > 0):
+        uvflg(uvdata, bchan=0, echan=args.bchan)
+        uvflg(uvdata, bchan=args.echan, echan=nchans)
 
     if args.calib:
         assert args.target is not None, "The target source(s) must be provided."
@@ -1188,20 +1262,27 @@ if __name__ == '__main__':
 
     if args.export:
         split_sources(args.projectname, sources=args.target.split(',') + args.bpsour.split(',') + \
-                      (args.target.split(',') if args.target is not None else []), bchan=args.bchan,
+                      (args.phaseref.split(',') if args.phaseref is not None else []), bchan=args.bchan,
                       echan=args.echan, avgchan=-1 if args.avgchan else 0, replace=True)
 
     if args.selfcal is not None:
+        first_amp_sc = True
         for sc_loop in args.sc_solmode.split(';'):
+            sc_mode, sc_int = sc_loop.split(':')
             selfcalibration(args.projectname, refant=args.refant.split(','), imagefile=args.selfcal,
                             calsour=args.sc_calsour,
-                            sources=args.sc_calsour + args.sc_target if args.sc_target is not None else [],
-                            solmode=sc_loop.split(':')[0], solint=float(sc_loop.split(':')[1]),
-                            minsnr=args.minsnr, avgpol=args.sc_avgpol, minant=2)
+                            sources=[args.sc_calsour] + args.sc_target.split(',') \
+                                    if args.sc_target is not None else [],
+                            solmode=sc_mode.upper(), solint=float(sc_int),
+                            minsnr=args.minsnr, avgpol=args.sc_avgpol, minant=2,
+                            normaliz=1 if first_amp_sc and ('a' in sc_mode.lower()) else 0)
+
+            if 'a' in sc_mode.lower():
+                first_amp_sc = False
 
     if args.export:
-        split_sources(args.projectname, sources=args.target.split(',') + args.bpsour.split(',') + \
-                      (args.target.split(',') if args.target is not None else []), bchan=args.bchan,
-                      echan=args.echan, avgchan=-1 if args.avgchan else 0, replace=True)
+        split_sources(args.projectname, sources=[args.sc_calsour] + args.sc_target.split(',') \
+                                    if args.sc_target is not None else [], bchan=args.bchan,
+                      echan=args.echan, avgchan=-1 if args.avgchan else 0, replace=False)
 
     rprint(f"\n\n[green]AIPS-ParselTongue appears to have ended successfully[/green]")
