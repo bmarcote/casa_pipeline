@@ -1161,7 +1161,9 @@ if __name__ == '__main__':
 
 
     if args.initial:
-        importdata(args.projectname, args.disk, args.replace, args.fitsidifiles, args.uvfits)
+        fitsidifiles = args.fitsidifiles if (args.fitidifiles, args.uvfits).count(None) < 2 \
+                       else f"{args.projectname.lower()}_1_1.IDI"
+        importdata(args.projectname, args.disk, args.replace, fitsidifiles, args.uvfits)
 
     uvdata: AIPSUVData = AIPSUVData(args.projectname.upper(), "UVDATA", 1, 1)
     if not uvdata.exists():
