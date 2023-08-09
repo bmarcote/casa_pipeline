@@ -22,6 +22,7 @@ import yaml
 import numpy as np
 from astropy import units as u
 from astropy import coordinates as coord
+from astropy.io import fits
 from rich import print as rprint
 from rich import progress
 import casatasks
@@ -724,6 +725,12 @@ class Project(object):
                                datacolumn=datacolumn, multisource=(len(self.sources) > 1),
                                combinespw=combinespw, padwithflags=padwithflags,
                                overwrite=overwrite)
+
+        # assert self.freqsetup is not None
+        # # TODO: check that this does the correct thing
+        # fits.setval(outfitsfilename, keyword='OLDRFQ  ', value=f"{self.freqsetup.frequency_range[0].to(u.GHz).value}D+09")
+        # if self.observatory.upper() == 'EVN':
+        #     fits.setval(outfitsfilename, keyword='CORRELAT', value=f"SFXC")
 
 
     def exists_local_copy(self) -> bool:

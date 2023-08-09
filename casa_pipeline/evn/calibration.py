@@ -969,7 +969,6 @@ class Aips(object):
         sbd_timerange = self.converttime2aips(self._ms.calibrate.get_sbd_timerange())
 
         cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", str(aipsno), self._ms.projectname,
-               "--uvfits", f"{self._ms.projectname}.UVFITS" if uvfits is None else uvfits,
                "--target", ','.join(self._ms.sources.targets.names),
                "--fringefinder", ','.join(self._ms.sources.fringe_finders.names),
                "--refant", ','.join(self._ms.refant), "--calib",
@@ -979,6 +978,9 @@ class Aips(object):
 
         if avgchan:
             cmd += ["--avgchan"]
+
+        if uvfits is not None:
+            cmd += ["--uvfits", uvfits]
 
         rprint(f"\n[bold]{' '.join(cmd)}[/bold]")
         result = subprocess.run(cmd, shell=False, stdout=None, stderr=subprocess.STDOUT)
@@ -998,21 +1000,37 @@ class Aips(object):
 
 
     def selfcal_with_difmapimage(self, fitsimage: str, aipsno: Optional[int] = None,
-                                 solmode: str = 'ap', solint: float = 0):
+                                 ref_source: Optional[str] = None, export: bool = False,
+                                 solmode: str = 'a&p', solint: float = 0.0):
         """Imports a FITS image into AIPS.
+
+        ref_source is meant to be the source contained in the fitsimage. If the number
+        of phase reference sources is one, then it is assumed to be that one and it is not needed.
+        Otherwise it must be set.
         """
-        fitsimage = Path(fitsimage)
+        pathimage = Path(fitsimage)
         aipsno = self.aipsno_from_project() if aipsno is None else aipsno
-        if not fitsimage.exists():
+        if not pathimage.exists():
             raise FileNotFoundError(f"The file {fitsimage} cannot be found.")
 
         capi.tools.fix_difmap_image(fitsimage)
         cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", str(aipsno), self._ms.projectname,
-               "--selfcal", str(fitsimage), "--target", ','.join(self._ms.sources.targets.names),
+               "--selfcal", fitsimage, "--target", ','.join(self._ms.sources.targets.names),
                "--fringefinder", ','.join(self._ms.sources.fringe_finders.names),
-               "--refant", ','.join(self._ms.refant)]
-        if len(self._ms.sources.phase_calibrators) > 0:
-            cmd += ["--phaseref", ','.join(self._ms.sources.phase_calibrators.names)]
+               "--refant", ','.join(self._ms.refant), "--sc_solmode", solmode, "--sc_solint", str(solint)]
+
+        if ref_source is not None:
+            cmd += ["--phaseref", ref_source]
+        elif len(self._ms.sources.phase_calibrators) == 1:
+            cmd += ["--phaseref", self._ms.sources.phase_calibrators.names[0]]
+        elif len(self._ms.sources.phase_calibrators) == 0 and len(self._ms.sources.targets) == 1:
+            cmd += ["--phaseref", self._ms.sources.targets.names[0]]
+        else:
+            raise ValueError("As there are multiple phase calibrators and/or targets, "
+                             "the 'ref_source' parameter must be set.")
+
+        if export:
+            cmd += ["--sc_export"]
 
         rprint(f"\n[bold]{' '.join(cmd)}[/bold]")
         result = subprocess.run(cmd, shell=False, stdout=None, stderr=subprocess.STDOUT)

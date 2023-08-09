@@ -111,6 +111,14 @@ class Flagging(object):
             capi.tools.shell_command("aoflagger",
                                      ["-strategy", strategy_file, str(self._ms.msfile)])
 
+    # def aips_flag(self, antennas: Optional[list] = None, baselines: Optional[list] = None,
+    #               sources: Optional[list] = None, stokes: str = '',
+    #               bif: int = 0, eif: int = 0, bchan: int = 0, echan: int = 0,
+    #               timerange: Optional[list] = None, min_elevation: float = 0,
+    #               max_elevation: float = 0, opmode: str = 'flag'):
+    #     pass
+
+
 
     def check_unflagged_data(self):
         """Checks if there are still unflagged data.

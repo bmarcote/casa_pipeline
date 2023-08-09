@@ -131,6 +131,12 @@ class Plotting(object):
 
         plt.close()
 
+    def elevation(self, source: Optional[str] = None, outfile: Optional[str] = None):
+        """Creates a plot with the source elevation along the time.
+        If source specified, it only plots the elevation for the specified source.
+        """
+        pass
+
     def dynamic_range(self,  xaxis: str = 'time', yaxis: str = 'freq', zaxis: str = 'amp',
                       outfile: Optional[str] = None):
         """Creates a plot with the specified (x,y) axis, and with color the z axis.
