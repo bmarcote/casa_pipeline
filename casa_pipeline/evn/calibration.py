@@ -15,6 +15,7 @@ import astropy.units as u
 from rich import print as rprint
 import casatasks
 from casatasks.private import tec_maps
+import casatools
 from casatools import table as tb
 from casatools import componentlist as cl
 # from casatools import msmetadata as msmd
@@ -354,7 +355,7 @@ class Calibration(object):
 
     def __init__(self, ms: capi.Project, caldir: Union[str, Path]):
         self._ms = ms
-        self._caldir = caldir
+        self._caldir = caldir if isinstance(caldir, Path) else Path(caldir)
         self._callib = Callib(caldir / f"callib-{self._ms.projectname}.txt")
         self._sbd_timerange = None
         self._aips = Aips(self._ms)
@@ -682,7 +683,7 @@ class Calibration(object):
         """Fringe fit CASA task.
         """
         if refant is None:
-            #TODO: select the prioritized antennas
+            refant = ','.join(self.prioritize_ref_antennas())
             pass
 
         casatasks.fringefit(vis=str(self._ms.msfile), caltable=caltable, field=field,
@@ -728,7 +729,7 @@ class Calibration(object):
             field =  ','.join(self._ms.sources.fringe_finders.names)
 
         if refant is None:
-            refant = ','.join(self._ms.refant)
+            refant = ','.join(self.prioritize_ref_antennas())
 
         rprint("\n[bold]Running bandpass calibration.[/bold]")
         casatasks.bandpass(vis=str(self._ms.msfile), caltable=caltable, field=field,
@@ -838,17 +839,35 @@ class Calibration(object):
         cl.done()
 
 
-    # def self_calibration(project: obsdata.Project, source_model: str, calmode: str, solint: int):
-    #     raise NotImplementedError
-    #     # Maybe just a function that calls in loop all expected iteractions:
-    #     #  p, p, p, a&p, p, a&p, p
-    #     # In the amplitude selfcal (not the gscale with combine scan), use solnorm=True so it
-    #     # only corrects for time-dependent gain residuals, not the flux scale.
-    #
-    #     # First, let's refine the delays
-    #     gaincal(vis='tl016b_cal1.ms', field='J1154+6022', caltable='tl016b_cal1.dcal',
-    #     solint='inf', refant=project.refants, minblperant=3, gaintype='K', calmode=calmode,
-    #     parang=False)
+    def self_calibration(self, field: str, source_model: str, calmode: str, solint: str, minblperant=3,
+                         transferto: Optional[list] = None):
+        # raise NotImplementedError
+        # Maybe just a function that calls in loop all expected iteractions:
+        #  p, p, p, a&p, p, a&p, p
+        # In the amplitude selfcal (not the gscale with combine scan), use solnorm=True so it
+        # only corrects for time-dependent gain residuals, not the flux scale.
+
+
+        calsctable = self.caldir / f"{str(self._ms.projectname).lower()}.sc"
+        calktable = self.caldir / f"{str(self._ms.projectname).lower()}.dsc"
+        sc_n = 1
+        while calsctable.exists():
+            calsctable = self.caldir / f"{str(self._ms.projectname).lower()}.sc{sc_n}"
+            sc_n += 1
+
+        # Properly with complist = component list
+        casatools.ft(vis=str(self._ms.msfile), field=field, model=source_model, usescratch=True)
+        # First, let's refine the delays
+        casatasks.gaincal(vis=str(self._ms.msfile), field=field, caltable=calktable,
+                          solint=solint, refant=','.join(self.prioritize_ref_antennas()), minblperant=minblperant,
+                          gaintype='K', calmode=calmode, parang=False)
+        casatasks.gaincal(vis=str(self._ms.msfile), field=field, caltable=calsctable,
+                          solint=solint, refant=','.join(self.prioritize_ref_antennas()), minblperant=minblperant,
+                          gaintype='G', gainfield=field, gaintable=[calktable], calmode=calmode, parang=False)
+        casatasks.applycal(vis=self._ms.msfile, gaintable=[calktable, calsctable], gainfield=[field, field])
+        if transferto is not None:
+            for msfile in transferto:
+                casatasks.applycal(vis=msfile, gaintable=[calktable, calsctable], gainfield=[field, field])
 
 
 # NOTE: for selfcal phase-only, use solnorm=False. but for A&P, solnorm=True. And parang=False?
@@ -934,7 +953,7 @@ class Aips(object):
     def a_priori_calibration(self, aipsno: Optional[int] = None,
                              aips_fitsidifile: Optional[str] = None):
         aipsno = self.aipsno_from_project() if aipsno is None else aipsno
-        cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", str(aipsno), self._ms.projectname,
+        cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", self._ms.projectname, "--aipsid", str(aipsno),
                "-i", "--replace", "--fits",
                f"{self._ms.projectname}_1_1.IDI" if aips_fitsidifile is None else aips_fitsidifile
                ]
@@ -968,7 +987,7 @@ class Aips(object):
         aipsno = self.aipsno_from_project() if aipsno is None else aipsno
         sbd_timerange = self.converttime2aips(self._ms.calibrate.get_sbd_timerange())
 
-        cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", str(aipsno), self._ms.projectname,
+        cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", self._ms.projectname, "--aipsid", str(aipsno),
                "--target", ','.join(self._ms.sources.targets.names),
                "--fringefinder", ','.join(self._ms.sources.fringe_finders.names),
                "--refant", ','.join(self._ms.refant), "--calib",
@@ -1014,7 +1033,7 @@ class Aips(object):
             raise FileNotFoundError(f"The file {fitsimage} cannot be found.")
 
         capi.tools.fix_difmap_image(fitsimage)
-        cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", str(aipsno), self._ms.projectname,
+        cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", self._ms.projectname, "--aipsid", str(aipsno),
                "--selfcal", fitsimage, "--target", ','.join(self._ms.sources.targets.names),
                "--fringefinder", ','.join(self._ms.sources.fringe_finders.names),
                "--refant", ','.join(self._ms.refant), "--sc_solmode", solmode, "--sc_solint", str(solint)]
@@ -1076,7 +1095,7 @@ class Aips(object):
         else:
             source = ','.join(source)
 
-        cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", str(aipsno), self._ms.projectname,
+        cmd = ["ParselTongue", _FILE_DIR + "/parseltongue.py", self._ms.projectname, "--aipsid", str(aipsno),
                "--transfer", str(fitsididata), "--target", source,
                "--refant", ','.join(self._ms.refant)]
         if avgchan:

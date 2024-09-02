@@ -16,6 +16,7 @@ class Jplotter(object):
     """
     def __init__(self, ms: capi.Project):
         self._ms = ms
+        # TODO: It will need to run jplotter...
         if self._ms.msfile.exists():
             self.open_ms()
 
@@ -23,6 +24,7 @@ class Jplotter(object):
     def open_ms(self):
         yield f"ms {str(self._ms.msfile)}"
         yield "indexr"
+
 
     def autocorr(self, sources: Optional[list] = None, scans: Optional[list] = None):
         """It will create auto-correlation plots for the given sources.
@@ -42,6 +44,12 @@ class Jplotter(object):
         yield "pt ampchan"
         yield "y 0 2"
         # select the scan
+        if scans is not None:
+            yield f"scan {' '.join(scans)}"
+
+        if sources is not None:
+            yield f"src {' '.join(sources)}"
+
         # yield "scan mid-30s to mid+30s where src ~ {0}".format( scansel(settings.calsrc) )
         yield "new all false bl true sb false time true"
         yield "multi true"
@@ -52,6 +60,28 @@ class Jplotter(object):
         yield "pl"
         print("done auto plots on calibrator scan")
 
+
+    def uvplot(self, sources: Optional[list] = None, per_source: bool = True):
+        """Creates a (u,v) coverage plot.
+        """
+        print("Generating uv plot.")
+        yield "pt uv"
+        yield "bl cross"
+        yield "fq */p;ch none"
+        yield "time none"
+        yield "avt none"
+        yield "avc none"
+        yield "multi true"
+        yield "ckey src src[none]=1"
+        yield "new all false"
+        if per_source:
+            yield "new sb"
+
+        if sources is not None:
+            yield f"src ' '.join(sources)"
+
+        yield "pl"
+        print("(u,v) plot done.")
 
 
 class Casaplot(object):
@@ -130,6 +160,13 @@ class Plotting(object):
             fig.savefig(outfile, dpi=330, bbox_inches='tight', pad_inches=0.01)
 
         plt.close()
+
+
+    def uvplot(self, src: Optional[Union[list, str]] = None, outfile: Optional[str] = None):
+        """Produces a (u,v) coverage plot for the given source.
+        """
+        pass
+
 
     def elevation(self, source: Optional[str] = None, outfile: Optional[str] = None):
         """Creates a plot with the source elevation along the time.

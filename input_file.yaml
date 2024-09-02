@@ -11,6 +11,7 @@ sources:
   target: a_source
   phaseref: a_pcal
   fringefinder: a_ff
+  check:
 
 
 calibration:

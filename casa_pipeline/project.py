@@ -676,7 +676,7 @@ class Project(object):
                "FreqSetup should already be known for the given MS when split."
         if ((chanbin == -1) or (chanbin > 1)) and (self.freqsetup.channels > 1):
             kwargs['chanaverage'] = True
-            kwargs['chanbin'] = self.freqsetup.channels
+            kwargs['chanbin'] = self.freqsetup.channels  # TODO: it should get the chanbin number if > 1, instead of .channels
         else:
             kwargs['chanaverage'] = False
             kwargs['chanbin'] = 1

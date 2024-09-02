@@ -461,6 +461,7 @@ def splat(uvdata: AIPSUVData, sources: list = [''], bif: int = 0, eif: int = 0, 
           channel: int = 0, chinc: int = 1, solint: int = 0):
     splat = AIPSTask('splat')
     splat.indata = uvdata
+    # TODO: outname!!
     splat.sources[1:] = sources
     splat.bif = bif
     splat.eif = eif
@@ -1258,7 +1259,7 @@ if __name__ == '__main__':
                          bpsour=args.bpsour.split(','),
                          phaseref=None if args.phaseref is None else args.phaseref.split(','),
                          sbd_timerange=None if args.sbdtime is None else [int(t) for t in args.sbdtime.split(',')],
-                         model=None, bchan=args.bchan, echan=args.echan)
+                         model=None, bchan=args.bchan, echan=args.echan, tecor=args.iono)
 
     if args.export:
         split_sources(args.projectname, sources=args.target.split(',') + args.bpsour.split(',') + \
