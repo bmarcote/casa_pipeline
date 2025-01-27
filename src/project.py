@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.11
 """Defines a project that specifies an interferometric radio observation.
 This module defines all usual metadata and formats that are spected for such data
 and the actions that the user may expect to perform on it.
@@ -294,7 +294,7 @@ class Project(object):
         self._outdir = self.cwd / 'results'
         self._sources = capi.Sources()
         self._antennas = capi.Antennas()
-        self._splits = defaultdict(list)
+        self._splits: dict[str, list] = defaultdict(list)
         self._freqsetup = None
         self._last_step = None
 

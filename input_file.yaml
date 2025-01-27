@@ -15,8 +15,8 @@ sources:
 
 
 calibration:
-  do_ionospheric: "default"
-  sbd_timerange: "default"
+  do_ionospheric: "auto"
+  sbd_timerange: "auto"
 
 flagging:
   quack:

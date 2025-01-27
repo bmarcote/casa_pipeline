@@ -584,7 +584,6 @@ class Calibration(object):
                                     delaywindow=[-200, 200], ratewindow=[-5e-8, 5e-8],
                                     refant=','.join(self.prioritize_ref_antennas()), combine='spw',
                                     minsnr=3, gaintable=self.callib.gaintables(),
-                                    #weightfactor=1, TODO
                                     docallib=True, callib=str(self.callib.filename),
                                     corrdepflags=True, parang=parang)
             else:
@@ -595,7 +594,6 @@ class Calibration(object):
                                     delaywindow=[-200, 200], ratewindow=[-5e-8, 5e-8],
                                     refant=','.join(self.prioritize_ref_antennas()), combine='spw',
                                     minsnr=3, gaintable=self.callib.gaintables(),
-                                    #weightfactor=1, TODO
                                     interp=self.callib.interps(), corrdepflags=True,
                                     spwmap=self.callib.spwmaps(), parang=parang)
 

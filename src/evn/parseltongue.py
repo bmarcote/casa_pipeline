@@ -264,7 +264,7 @@ def tacop(uvdata: AIPSUVData, fromuvdata: AIPSUVData, inext: str, inver: int, nc
 
 
 @log
-def ionos(uvdata: AIPSUVData, aparm=[1, 0, 1, 0.85, 56.7, 0.9782]):
+def ionos(uvdata: AIPSUVData, aparm=[1, 0, 0, 0.85, 56.7, 0.9782]):
     # Replicates the VLBATECOR lines to grap the IONEX files
     assert uvdata.exists()
     nx = uvdata.table('NX', 1)
