@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from .backends import Backend, get_backend
+from .comments import RUN_WARNINGS_FILENAME, merge_run_warnings
 from .errors import StepError
 from .logging_utils import add_file_log, get_logger, warnings
 from .models import CalTable, ObsMetadata
@@ -28,8 +29,12 @@ logger = get_logger()
 #: File holding the calibration chain, so a resumed process can rebuild it.
 CALTABLES_FILENAME = ".caltables.json"
 CAL_SELECTION_FILENAME = ".cal_selection.json"
+#: Source roles inferred from the data, so a resumed run does not survey every source again.
+SOURCE_ROLES_FILENAME = ".source_roles.json"
 #: Cached observation metadata, so reporting works without reopening the data.
 METADATA_FILENAME = ".metadata.json"
+#: File listing the project codes of a run (written by ``VLBIObs``, which owns the name as ``PROJECT_FILENAME``).
+PROJECT_FILENAME = ".project.json"
 
 #: Pipeline steps in execution order. Resuming from a step invalidates it and
 #: everything after it, so this must match the order :meth:`VLBIObs.run` runs them
@@ -63,6 +68,9 @@ class Observation:
 
     def __init__(self, project_code: str, config: dict, backend: Optional[Backend] = None,
                  work_dir=None) -> None:
+        # The warning collector is shared by the whole process: only what is recorded from here on
+        # can be about this observation (see persist_run_warnings).
+        self._warnings_seen = len(warnings.summary())
         self.project_code = project_code
         self.config = config
         self.observatory = config.get("global", {}).get("observatory", "EVN")
@@ -206,6 +214,49 @@ class Observation:
             except OSError:
                 pass
 
+    # -- the warnings of the pipeline, kept for the report --
+    def _sibling_project_codes(self) -> list[str]:
+        """Other project codes of the same run, from the ``.project.json`` in (or just above) the work directory.
+
+        A multi-project run keeps that file one level up, a single project in its own directory. A missing
+        or unreadable file simply yields no sibling.
+        """
+        codes: set[str] = set()
+        for folder in (Path(self.work_dir), Path(self.work_dir).parent):
+            try:
+                data = json.loads((folder / PROJECT_FILENAME).read_text())
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict) and isinstance(data.get("projects"), list):
+                codes.update(str(code) for code in data["projects"])
+        return sorted(codes - {self.project_code})
+
+    def persist_run_warnings(self) -> None:
+        """Keep the warnings this process recorded for later reports (``<work_dir>/.run_warnings.json``).
+
+        The collector lives in memory, and a resumed run skips the steps that raised a warning, so without
+        this file a report made later (``vlbipy report``, or the end of a resumed run) would lose them. Only
+        the messages recorded since this object was created are stored, minus those prefixed with another
+        project code of the same run (:func:`vlbipy.comments.merge_run_warnings`). Called by
+        :meth:`report`; ``--scratch`` deletes the file. Nothing is written for in-memory backends.
+        """
+        if not self._backend.requires_data_files:
+            return
+        recorded = warnings.summary()
+        start = self._warnings_seen if self._warnings_seen <= len(recorded) else 0
+        merge_run_warnings(self.work_dir, recorded[start:], self._sibling_project_codes())
+
+    def clear_run_warnings(self) -> None:
+        """Forget the warnings kept from earlier runs (used by ``--scratch``)."""
+        if not self._backend.requires_data_files:
+            return
+        path = Path(self.work_dir) / RUN_WARNINGS_FILENAME
+        if path.is_file():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
     def add_gaintable(self, table: CalTable, step: str) -> CalTable:
         """Append a table to the apply chain, tagging it with the step that made it."""
         table.step = step
@@ -239,6 +290,111 @@ class Observation:
         if self._metadata is None:
             self._metadata = self._load_metadata_cache()
         return self._metadata
+
+    @property
+    def _source_roles_path(self) -> Optional[Path]:
+        """Path of the persisted inferred source roles, or ``None`` for in-memory backends."""
+        if not self._backend.requires_data_files:
+            return None
+        return Path(self.work_dir) / SOURCE_ROLES_FILENAME
+
+    def load_source_roles(self) -> tuple[dict, dict]:
+        """Read the roles inferred on an earlier run; ``({}, {})`` when there are none.
+
+        Inferring them needs a fringe SNR survey over every source, so the answer
+        is persisted and a resumed run reuses it rather than repeating the most
+        expensive part of inspection. Roles are a property of the observation,
+        not of a pass.
+
+        Returns
+        -------
+        (dict, dict)
+            ``{source: SourceType}`` and ``{target: [calibrator]}``; unknown role
+            names in the file are skipped rather than failing the run.
+        """
+        from .models import SourceType
+
+        path = self._source_roles_path
+        if path is None or not path.is_file():
+            return {}, {}
+        try:
+            data = json.loads(path.read_text())
+            roles = {}
+            for name, value in (data.get("roles") or {}).items():
+                try:
+                    roles[name] = SourceType(value)
+                except ValueError:
+                    logger.warning("[{}] {} lists an unknown role {!r} for {}; ignoring it",
+                                   self.project_code, path.name, value, name)
+            return roles, {t: list(c) for t, c in (data.get("phase_referencing") or {}).items()}
+        except (json.JSONDecodeError, OSError, AttributeError) as exc:
+            logger.warning("[{}] could not read {} ({}); the source roles will be inferred again",
+                           self.project_code, path.name, exc)
+            return {}, {}
+
+    def clear_source_roles(self) -> None:
+        """Forget the persisted inferred source roles (used by ``--scratch``)."""
+        path = self._source_roles_path
+        if path is not None and path.is_file():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+    def adopt_source_roles(self, roles: dict, phase_referencing: Optional[dict] = None, *,
+                           persist: bool = True) -> list[str]:
+        """Add the sources whose role was inferred from the data; return the names added.
+
+        Declared roles are authoritative and never touched: a name already in
+        :attr:`sources` is skipped even when ``roles`` carries a different role
+        for it. Coordinates come from the metadata so the new sources behave like
+        declared ones (separations, phase-referencing resolution).
+
+        Parameters
+        ----------
+        roles : dict
+            ``{source name: SourceType}`` from :func:`vlbipy.sources.infer_source_roles`.
+        phase_referencing : dict, optional
+            ``{target: [calibrator]}`` to merge into the phase-referencing map
+            for the targets that do not have one yet.
+        persist : bool
+            Write the adopted roles to :data:`SOURCE_ROLES_FILENAME` so a resumed
+            run reuses them instead of surveying every source again.
+
+        Returns
+        -------
+        list of str
+            Names actually added, in the order they were added.
+        """
+        from astropy import coordinates as coord
+        from astropy import units as u
+
+        from .sources import Source
+
+        coords = (self._metadata.source_coords if self._metadata else {}) or {}
+        added = []
+        for name, role in roles.items():
+            position = (coord.SkyCoord(coords[name][0] * u.deg, coords[name][1] * u.deg)
+                        if name in coords else None)
+            if self.sources.add(Source(name=name, coordinates=position, source_type=role)):
+                added.append(name)
+        for target, calibrators in (phase_referencing or {}).items():
+            if target not in self.sources.phase_referencing:
+                self.sources.phase_referencing[target] = list(calibrators)
+        if added:
+            logger.info("[{}] adopted inferred source role(s): {}", self.project_code,
+                        ", ".join(f"{name} = {roles[name].value}" for name in added))
+        path = self._source_roles_path
+        if added and persist and path is not None:
+            stored = {"roles": {name: roles[name].value for name in added},
+                      "phase_referencing": {t: list(c) for t, c in (phase_referencing or {}).items()}}
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(stored, indent=2))
+            except OSError as exc:
+                logger.warning("[{}] could not write {} ({}); a resumed run will infer the source "
+                               "roles again", self.project_code, path.name, exc)
+        return added
 
     def restrict_sources_to_data(self) -> list[str]:
         """Forget declared sources this observation has no data for; return their names.
@@ -365,6 +521,8 @@ class Observation:
             self.set_gaintables([])
             self._snr_surveys.clear()
             self.clear_cal_selection()
+            self.clear_source_roles()
+            self.clear_run_warnings()
             self._scratch = True
             return
         if from_step:
@@ -444,6 +602,8 @@ class Observation:
             "warnings": warnings.summary(),
         }
         if self._backend.requires_data_files:
+            # Before the dashboard: its general comments (and summary.md) list these warnings.
+            self.persist_run_warnings()
             try:
                 from .dashboard import build_dashboard
                 rep["dashboard"] = str(build_dashboard(self))
@@ -454,13 +614,16 @@ class Observation:
                     len(rep["steps"]), len(rep["gaintables"]))
         return rep
 
-    def notebook(self, path: Optional[str] = None) -> str:
-        """Write the interactive reduction notebook (``<work_dir>/<code>.ipynb``); "" when unavailable."""
+    def notebook(self, path: Optional[str] = None, embed: bool = True) -> str:
+        """Write the interactive reduction notebook (``<work_dir>/<code>.ipynb``); "" when unavailable.
+
+        ``embed=True`` stores the plots in the notebook (self-contained); ``False`` links them by relative path.
+        """
         if not self._backend.requires_data_files:
             return ""
         try:
             from .notebook import write_notebook
-            return str(write_notebook(self, path))
+            return str(write_notebook(self, path, embed=embed))
         except Exception as exc:  # noqa: BLE001 - nbformat missing or a render problem must not abort a run
             warnings.warn(f"{self.project_code}: notebook not written ({exc})")
             return ""

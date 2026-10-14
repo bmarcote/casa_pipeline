@@ -13,6 +13,7 @@ CASA installation; constructing this backend without them raises a clear
 from __future__ import annotations
 
 import datetime as dt
+import json
 import math
 import shutil
 from pathlib import Path
@@ -26,7 +27,8 @@ from ..models import (Antenna, CalTable, FreqSetup, ObsMetadata, QualityMetrics,
                       Stokes)
 from ..results import Image
 from ..tools import fetch_eop_file, mjdsec2datetime, space_available_gb
-from .base import Backend, CalibrationOps, DataOps, ExportOps, FlagOps, ImagingOps, PlotOps
+from .base import (TIME_EVOLUTION_CHANNEL_FRACTION, Backend, CalibrationOps, DataOps, ExportOps, FlagOps,
+                   ImagingOps, PlotOps)
 
 logger = get_logger()
 
@@ -36,6 +38,17 @@ APRIORI_TABLE_SPECS = {"accor": (".accor", "nearest"), "tsys": (".tsys", "neares
 
 #: SNR value CASA writes for the reference antenna's own (trivial) solution.
 _REFANT_SNR_SENTINEL = 999.0
+
+#: Position of each Fringe Jones parameter inside one polarization's block of FPARAM.
+#: CASA writes four per polarization, in this order, with the delay in nanoseconds,
+#: the rate dimensionless (s/s) and the phase in radians.
+FRINGE_PARAMETERS = {"phase": 0, "delay": 1, "rate": 2, "dispersive": 3}
+
+#: Fringe parameters smoothed in time by default: the delay and the rate are smooth
+#: physical quantities measured once per solution interval, so averaging neighbouring
+#: solutions beats each one's own noise. The phase is deliberately absent — it wraps,
+#: and a mean of values either side of a 2-pi jump is meaningless.
+FRINGE_SMOOTH_PARAMETERS = ("delay", "rate")
 
 #: Parallel-hand polarization pairs, by correlation basis.
 _PARALLEL_HANDS = {Stokes.RR: "RR", Stokes.LL: "LL", Stokes.XX: "XX", Stokes.YY: "YY"}
@@ -92,12 +105,13 @@ def refit_polynomial(coefficients, lo: float, hi: float, *, max_coefficients: in
 
 
 def antenna_elevation_range(metadata, antenna: str, *, pad: float = 2.0,
-                            default: tuple[float, float] = (8.0, 88.0)) -> tuple[float, float]:
+                            default: Optional[tuple[float, float]] = (8.0, 88.0)) -> Optional[tuple[float, float]]:
     """Lowest and highest elevation (deg) at which ``antenna`` observed, padded by ``pad`` and kept in 1-90.
 
     Evaluated at the start, middle and end of every scan the antenna took part
     in. Falls back to ``default`` when the antenna position or the source
-    coordinates are not known.
+    coordinates are not known, or the antenna is in no scan; pass ``default=None``
+    to tell that case apart from a measured range.
     """
     try:
         from astropy import units as u
@@ -125,6 +139,89 @@ def antenna_elevation_range(metadata, antenna: str, *, pad: float = 2.0,
     except Exception as exc:  # noqa: BLE001 - a missing ephemeris must not stop the calibration
         logger.debug("elevation range of {} not computed ({}); using {}", antenna, exc, default)
         return default
+
+
+def observed_elevation_ranges(metadata) -> dict[str, tuple[float, float]]:
+    """Elevation range (deg) of every antenna that has one: ``{antenna: (lowest, highest)}``.
+
+    Antennas whose range cannot be worked out (no scan, unknown position or source coordinates) are left
+    out rather than given a made-up range. See :func:`antenna_elevation_range` for how a range is measured.
+    """
+    ranges = {}
+    for name in getattr(metadata, "antennas", None) or {}:
+        span = antenna_elevation_range(metadata, name, default=None)
+        if span is not None:
+            ranges[name] = span
+    return ranges
+
+
+#: Suffix of the JSON record kept beside a gain-curve caltable (``<code>.gcal.dpfu.json``). ``gencal``
+#: multiplies each gain-curve polynomial by the sensitivity (DPFU) of its antenna and stores only the
+#: product, so the table alone cannot tell a small dish from a poor gain; the record keeps the DPFUs.
+GAIN_CURVE_DPFU_SUFFIX = ".dpfu.json"
+
+
+def gain_curve_dpfu_path(caltable) -> Path:
+    """Path of the DPFU record of a gain-curve caltable: ``<caltable>.dpfu.json``, beside the table."""
+    table_path = Path(caltable)
+    return table_path.with_name(table_path.name + GAIN_CURVE_DPFU_SUFFIX)
+
+
+def read_gain_curve_sensitivities(gain_curve_table, antenna_names: list[str], handle) -> dict[str, dict]:
+    """Read the sensitivity (DPFU) of every antenna and subband from a ``GAIN_CURVE`` subtable.
+
+    Parameters
+    ----------
+    gain_curve_table : str or pathlib.Path
+        The ``GAIN_CURVE`` subtable of a measurement set.
+    antenna_names : list of str
+        Antenna names in ``ANTENNA`` table order (``ANTENNA_ID`` indexes it).
+    handle : casatools.table
+        Table tool used for the read; opened read-only and closed again here.
+
+    Returns
+    -------
+    dict
+        ``{antenna: {"type": TYPE of its first row, "dpfu": {subband: [dpfu_pol0, dpfu_pol1]}}}``. The
+        first row of an antenna and subband wins. Values are in K/Jy, rounded to the seven significant
+        digits a single-precision column holds, which gives back the number the station wrote.
+    """
+    if not handle.open(str(gain_curve_table)):
+        raise BackendError(f"could not open {gain_curve_table}")
+    antennas: dict[str, dict] = {}
+    try:
+        for row in range(handle.nrows()):
+            number, spw = int(handle.getcell("ANTENNA_ID", row)), int(handle.getcell("SPECTRAL_WINDOW_ID", row))
+            name = antenna_names[number] if 0 <= number < len(antenna_names) else f"#{number}"
+            entry = antennas.setdefault(name, {"type": str(handle.getcell("TYPE", row)), "dpfu": {}})
+            if spw not in entry["dpfu"]:
+                sensitivity = np.atleast_1d(np.asarray(handle.getcell("SENSITIVITY", row), dtype=float))
+                entry["dpfu"][spw] = [float(f"{value:.7g}") for value in sensitivity]
+    finally:
+        handle.close()
+    return antennas
+
+
+def read_gain_curve_dpfu(caltable) -> dict[str, dict[int, tuple[float, ...]]]:
+    """Read the DPFU record written beside a gain-curve caltable (see :data:`GAIN_CURVE_DPFU_SUFFIX`).
+
+    Returns
+    -------
+    dict
+        ``{antenna: {subband: (dpfu_pol0, dpfu_pol1)}}`` in K/Jy. Empty when the table has no record
+        (made before the record existed, or by another package) or the record cannot be read: the
+        caller then has to do without the sensitivities.
+    """
+    path = gain_curve_dpfu_path(caltable)
+    if not path.is_file():
+        return {}
+    try:
+        antennas = json.loads(path.read_text(encoding="utf-8"))["antennas"]
+        return {str(name): {int(spw): tuple(float(v) for v in values) for spw, values in entry["dpfu"].items()}
+                for name, entry in antennas.items()}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        logger.warning("gain curve: could not read the DPFU record {} ({}); ignoring it", path, exc)
+        return {}
 
 
 def _scan_chunks(scans, size: int = _SCANS_PER_READ) -> list[list[int]]:
@@ -236,6 +333,47 @@ def select_ms_rows(ms_tool, *, field: str = "", baseline: str = "", scans: Optio
             raise BackendError(f"selecting {selection} failed: {exc}") from exc
 
 
+def _delay_peak_amplitude(values: np.ndarray, good: np.ndarray, *, padding: int = 4,
+                          block: int = 20000) -> np.ndarray:
+    """Fringe amplitude of every visibility at its own best delay, averaged over the hands.
+
+    Uncalibrated visibilities carry a residual delay, i.e. a phase slope across
+    the channels of a subband, and averaging the channels as they are would
+    cancel the signal. The Fourier transform over the channels sums them
+    coherently at every trial delay; its peak, divided by the number of unflagged
+    channels, is the amplitude of the source at the delay that is there.
+    Zero-padding (``padding`` times) keeps the loss between two trial delays
+    below 3%. Pure noise does not average to zero this way but to roughly three
+    times the noise of the channel average, which is the floor of the estimate.
+
+    Parameters
+    ----------
+    values : numpy.ndarray
+        ``(n_hand, n_channel, n_row)`` complex visibilities.
+    good : numpy.ndarray
+        Same shape, True where unflagged.
+    block : int
+        Rows transformed at a time (bounds the memory of the padded transform).
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(n_row,)`` amplitudes; 0 where a row has no unflagged channel.
+    """
+    n_hand, n_channel, n_row = values.shape
+    total = np.zeros(n_row)
+    hands = np.zeros(n_row)
+    for start in range(0, n_row, block):
+        rows = slice(start, start + block)
+        masked = np.where(good[:, :, rows], values[:, :, rows], 0.0)
+        peak = np.abs(np.fft.fft(masked, n=padding * n_channel, axis=1)).max(axis=1)      # (n_hand, rows)
+        channels = good[:, :, rows].sum(axis=1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            total[rows] = np.where(channels > 0, peak / np.maximum(channels, 1), 0.0).sum(axis=0)
+        hands[rows] = (channels > 0).sum(axis=0)
+    return total / np.maximum(hands, 1.0)
+
+
 def _channel_average(values, flags: np.ndarray, pol_indices: list[int]) -> np.ndarray:
     """Vector-average a ``(npol, nchan, nrow)`` block over channels -> ``(nrow, n_selected_pol)``."""
     masked = np.where(flags, np.nan, np.asarray(values))[pol_indices, :, :]
@@ -297,13 +435,40 @@ def central_channel_selection(n_channels: int, fraction: float, subbands=()) -> 
         selected, or ``"*"`` when nothing is trimmed.
     """
     spw_part = compact_subband_selection(subbands) or "*"
-    if fraction >= 1.0 or n_channels < 4:
+    first, last = central_channel_range(n_channels, fraction)
+    if first == 0:
         return spw_part
-    n_edge = int(round(n_channels * (1.0 - fraction) / 2.0))
-    if n_edge < 1:
-        return spw_part
-    channels = f"{n_edge}~{n_channels - 1 - n_edge}"
-    return ",".join(f"{run}:{channels}" for run in spw_part.split(","))
+    return ",".join(f"{run}:{first}~{last}" for run in spw_part.split(","))
+
+
+def central_channel_range(n_channels: int, fraction: float) -> tuple[int, int]:
+    """First and last channel (0-based, inclusive) of the central ``fraction`` of a subband.
+
+    The same window as :func:`central_channel_selection` writes for CASA: every channel when
+    ``fraction`` is 1.0 or more, when the subband has fewer than 4 channels, or when the trim rounds
+    to less than one channel per edge. However small the fraction, the middle channel(s) remain.
+    """
+    n_edge = int(round(n_channels * (1.0 - fraction) / 2.0)) if fraction < 1.0 and n_channels >= 4 else 0
+    n_edge = min(n_edge, (n_channels - 1) // 2)
+    return (n_edge, n_channels - 1 - n_edge) if n_edge >= 1 else (0, max(n_channels - 1, 0))
+
+
+def average_recorded_channels(values, flags, pol_indices: list[int]) -> np.ndarray:
+    """Vector-average ``(n_corr, n_chan, n_row)`` visibilities over the channels that hold data.
+
+    A channel counts when it is unflagged *and* not exactly zero: a station that never recorded a
+    subband still has rows there, zero-filled, and before any flagging they look like data.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(n_row, len(pol_indices))`` complex64, ``nan`` where a row has no such channel in that hand.
+    """
+    selected = np.asarray(values)[pol_indices, :, :]
+    good = ~np.asarray(flags, dtype=bool)[pol_indices, :, :] & (selected != 0)
+    count = good.sum(axis=1)
+    total = np.where(good, selected, 0.0).sum(axis=1)
+    return np.where(count > 0, total / np.maximum(count, 1), np.nan).T.astype(np.complex64)
 
 
 class CasaDataOps(DataOps):
@@ -940,6 +1105,7 @@ class CasaDataOps(DataOps):
                 "column": column, "stokes_i": stokes_i}
 
     def read_baseline_timeline(self, project_code: str, *, field: str, column: str = "corrected",
+                               delay_search: bool = False, scans: Optional[list] = None,
                                metadata: Optional[ObsMetadata] = None) -> dict:
         """Read one amplitude per baseline and integration, averaged over the whole band.
 
@@ -949,12 +1115,23 @@ class CasaDataOps(DataOps):
         is needed to see an antenna arrive on source a few seconds late. Read a few
         scans of one subband at a time, like the other whole-field readers.
 
+        Before the fringe fit the phase still winds across each subband (the delay
+        is not removed yet) and a plain channel average would wash the signal out.
+        ``delay_search`` takes, per visibility and hand, the peak of the Fourier
+        transform over the channels instead (:func:`_delay_peak_amplitude`): the
+        fringe amplitude at whatever delay the data has. Hands and subbands are
+        then averaged as amplitudes.
+
         Parameters
         ----------
         field : str
             One field (a bright calibrator).
         column : str
             ``"corrected"`` (post-applycal) or ``"data"``.
+        delay_search : bool
+            Use the delay-searched amplitude; for data that is not fringe-fitted yet.
+        scans : list of int, optional
+            Read only these scans of the field (default: all of them).
 
         Returns
         -------
@@ -965,7 +1142,8 @@ class CasaDataOps(DataOps):
             ``integration`` (seconds).
         """
         meta = metadata or self.backend.data.get_metadata(project_code, [], "")
-        scans = [s for s in meta.scans if s.source == field]
+        wanted = {int(number) for number in scans} if scans else None
+        scans = [s for s in meta.scans if s.source == field and (wanted is None or s.scan_number in wanted)]
         if not scans:
             raise BackendError(f"{project_code}: no scans on {field!r}")
         pol_indices, _ = parallel_hand_indices(meta)
@@ -994,12 +1172,15 @@ class CasaDataOps(DataOps):
                     continue
                 good = ~np.asarray(record.pop("flag"), dtype=bool)[pol_indices, :, :]
                 count = good.sum(axis=(0, 1))
-                total = np.where(good, values[pol_indices, :, :], 0.0).sum(axis=(0, 1))
+                if delay_search:
+                    row_values = _delay_peak_amplitude(values[pol_indices, :, :], good)
+                else:
+                    row_values = np.where(good, values[pol_indices, :, :], 0.0).sum(axis=(0, 1)) / np.maximum(count, 1)
                 del values, good
                 ant1, ant2 = np.asarray(record["antenna1"]), np.asarray(record["antenna2"])
                 keep = (count > 0) & (ant1 != ant2)
                 pieces.append((ant1[keep], ant2[keep], np.asarray(record["time"], dtype=float)[keep],
-                               np.asarray(record["scan_number"])[keep], total[keep] / count[keep]))
+                               np.asarray(record["scan_number"])[keep], row_values[keep]))
         finally:
             ms_tool.close()
         if not pieces:
@@ -1130,6 +1311,126 @@ class CasaDataOps(DataOps):
                     len(baselines), refant, n_time)
         return {"baselines": dict(sorted(baselines.items())), "times": centres.tolist(),
                 "polarizations": pol_labels, "refant": refant, "field": field, "column": column}
+
+    def read_time_evolution(self, project_code: str, *, refant: str, subband: int, column: str = "data",
+                            channel_fraction: float = TIME_EVOLUTION_CHANNEL_FRACTION,
+                            metadata: Optional[ObsMetadata] = None, **kwargs) -> dict:
+        """Read every baseline to ``refant`` in one subband over the whole observation, per integration.
+
+        The whole-observation companion of :meth:`read_timeseries`, for the "time evolution" figures of
+        the report: every source, nothing averaged in time, and only the central ``channel_fraction`` of
+        the subband averaged in frequency (a vector average, :func:`average_recorded_channels`). Before
+        the fringe fit a residual delay winds the phase across the band and a residual rate winds it in
+        time, so a narrow central window at the native integration time is what keeps a detection
+        coherent.
+
+        Only the central channels of the baselines to ``refant`` are loaded, a few scans at a time
+        (:func:`_scan_chunks`), so a long observation never sits in memory; the measurement set is opened
+        read-only. A visibility is conjugated where the reference antenna is the second antenna of its
+        row, so every baseline reads ``refant - other``.
+
+        Parameters
+        ----------
+        refant : str
+            Reference antenna: only baselines including it are read.
+        subband : int
+            Subband (spectral window) index.
+        column : str
+            ``"data"`` (raw) or ``"corrected"``.
+        channel_fraction : float
+            Fraction of the channels, in the middle of the subband, that is averaged.
+        metadata : ObsMetadata, optional
+            Reuse already-loaded metadata instead of re-reading the measurement set.
+
+        Returns
+        -------
+        dict
+            As described in :meth:`DataOps.read_time_evolution`, plus ``read_seconds``. ``antennas`` holds
+            every other antenna with data, in antenna-table order, including those with nothing to show
+            in this subband (their ``notes`` entry says why).
+        """
+        from time import monotonic
+
+        started = monotonic()
+        meta = metadata or self.backend.data.get_metadata(project_code, [], "")
+        antenna_names = list(meta.antennas)
+        if refant not in antenna_names:
+            raise BackendError(f"{project_code}: reference antenna {refant!r} is not in the array")
+        subband, n_channels = int(subband), meta.freq_setup.n_channels
+        if not 0 <= subband < meta.freq_setup.n_subbands:
+            raise BackendError(f"{project_code}: subband {subband} does not exist "
+                               f"(the data has {meta.freq_setup.n_subbands})")
+        refant_id = antenna_names.index(refant)
+        first, last = central_channel_range(n_channels, channel_fraction)
+        pol_indices, pol_labels = parallel_hand_indices(meta)
+        column_name = {"corrected": "corrected_data", "data": "data"}[column]
+        scans = [s for s in meta.scans if refant in s.antennas and (not s.subbands or subband in s.subbands)]
+
+        pieces: list[tuple] = []
+        ms_tool = self.backend.tools.ms()
+        if not ms_tool.open(str(self.backend.ms_path(project_code)), nomodify=True):
+            raise BackendError(f"could not open MS for {project_code}")
+        try:
+            for scan_chunk in _scan_chunks(scans):
+                ms_tool.selectinit(datadescid=subband)
+                if not ms_tool.selectchannel(last - first + 1, first, 1, 1):
+                    raise BackendError(f"{project_code}: could not select channels {first}-{last} of "
+                                       f"subband {subband}")
+                try:
+                    select_ms_rows(ms_tool, baseline=f"{refant}&*", scans=scan_chunk)
+                except BackendError:
+                    ms_tool.reset()
+                    continue     # nothing recorded on these baselines in these scans
+                try:
+                    record = ms_tool.getdata([column_name, "flag", "antenna1", "antenna2", "time", "scan_number"])
+                except RuntimeError as exc:
+                    raise BackendError(f"{project_code}: could not read {column}: {exc}") from exc
+                ms_tool.reset()
+                values = record.get(column_name)
+                if values is None or not values.size:
+                    continue
+                averaged = average_recorded_channels(values, record["flag"], pol_indices)     # (n_row, n_hand)
+                ant1, ant2 = np.asarray(record["antenna1"]), np.asarray(record["antenna2"])
+                # A row is stored once, lower antenna first: turn it so the reference antenna leads.
+                averaged = np.where((ant2 == refant_id)[:, np.newaxis], np.conj(averaged), averaged)
+                keep = np.isfinite(averaged).any(axis=1) & (ant1 != ant2)
+                pieces.append((np.where(ant1 == refant_id, ant2, ant1)[keep],
+                               np.asarray(record["time"], dtype=float)[keep],
+                               np.asarray(record["scan_number"])[keep], averaged[keep]))
+        finally:
+            ms_tool.close()
+
+        if pieces:
+            other, row_time, row_scan, row_vis = (np.concatenate([piece[k] for piece in pieces]) for k in range(4))
+        else:
+            other, row_time, row_scan = np.zeros(0, dtype=int), np.zeros(0), np.zeros(0, dtype=int)
+            row_vis = np.zeros((0, len(pol_indices)), dtype=np.complex64)
+        others = [name for name in antenna_names if name != refant and meta.antennas[name].observed]
+        baselines: dict[str, dict] = {}
+        notes: dict[str, str] = {}
+        for name in others:
+            rows = np.flatnonzero(other == antenna_names.index(name))
+            rows = rows[np.argsort(row_time[rows], kind="stable")]
+            baselines[name] = {"times": row_time[rows], "scans": row_scan[rows].astype(np.int32),
+                               "vis": row_vis[rows]}
+            if not rows.size:
+                recorded = meta.antennas[name].subbands
+                notes[name] = "subband not recorded" if recorded and subband not in recorded else "no unflagged data"
+        window_ghz = meta.freq_setup.frequencies_ghz(subband)[first:last + 1]
+        elapsed = monotonic() - started
+        with_data = sorted({int(number) for number in np.unique(row_scan)})
+        logger.info("read_time_evolution: {} of subband {} (channels {}-{} of {}): {} baseline(s) to {} with data, "
+                    "{} sample(s) in {} scan(s), {:.1f} s", column, subband, first, last, n_channels,
+                    len(others) - len(notes), refant, row_time.size, len(with_data), elapsed)
+        return {"refant": refant, "subband": subband, "column": column, "polarizations": pol_labels,
+                "antennas": others, "baselines": baselines, "notes": notes,
+                "scan_sources": {int(s.scan_number): s.source for s in meta.scans},
+                "sources": list(meta.source_names), "scans_with_data": with_data,
+                "channels": [first, last], "n_channels": n_channels,
+                "frequency_ghz": float(np.mean(window_ghz)) if len(window_ghz) else meta.freq_setup.freq_ghz,
+                "bandwidth_mhz": (last - first + 1) * meta.freq_setup.channel_width / 1e6,
+                "time_range": [float(t) for t in meta.time_range], "n_samples": int(row_time.size),
+                "read_seconds": elapsed}
 
     def read_uvdistance(self, project_code: str, *, field: str = "", column: str = "corrected",
                         time_bin: float = 10.0, with_model: bool = False,
@@ -1684,9 +1985,49 @@ class CasaCalibrationOps(CalibrationOps):
                 raise BackendError(f"{project_code}: gencal caltype='{cal_type}' failed: {exc}") from exc
             tables.append(CalTable(cal_type=cal_type, path=str(table_path), field=field,
                                    interp=APRIORI_TABLE_SPECS[cal_type][1]))
+            if cal_type == "gc":
+                self._record_gain_curve_dpfu(ms, table_path)
         if not needs_eop:
             logger.info("EOP corrections not needed for this network; skipped")
         return tables
+
+    def _record_gain_curve_dpfu(self, ms: Path, table_path: Path) -> Optional[Path]:
+        """Write the antenna sensitivities (DPFU) of ``ms`` beside its gain-curve caltable.
+
+        The record (``<table>.dpfu.json``, read back with :func:`read_gain_curve_dpfu`) is what lets the
+        gain-curve plot show normalised curves once the measurement set is gone. Only that plot depends
+        on it, so a failure is logged and never stops the calibration.
+
+        Parameters
+        ----------
+        ms : pathlib.Path
+            Measurement set whose ``GAIN_CURVE`` subtable ``gencal`` just read.
+        table_path : pathlib.Path
+            The gain-curve caltable ``gencal`` wrote.
+
+        Returns
+        -------
+        pathlib.Path or None
+            The record written, or None when it could not be made.
+        """
+        path = gain_curve_dpfu_path(table_path)
+        try:
+            # The table was just regenerated: a record left by an earlier import must not outlive it.
+            path.unlink(missing_ok=True)
+            antennas = read_gain_curve_sensitivities(ms / "GAIN_CURVE", self._table_antenna_names(ms),
+                                                     self.backend.tools.table())
+            record = {"description": "Sensitivity (DPFU) of every antenna, per subband and polarization, from the "
+                                     "GAIN_CURVE subtable of the measurement set. The gain-curve caltable beside this "
+                                     "file stores dpfu * polynomial: dividing by these values gives the normalised "
+                                     "gain curve.",
+                      "unit": "K/Jy", "measurement_set": ms.name, "antennas": antennas}
+            path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 - only the normalisation of a plot depends on this file
+            logger.warning("gain curve: could not record the antenna sensitivities in {} ({}); the gain-curve plot "
+                           "will be normalised by the peak of each curve instead", path.name, exc)
+            return None
+        logger.info("gain curve: DPFU of {} antenna(s) recorded in {}", len(antennas), path.name)
+        return path
 
     def accor(self, project_code: str, field: str = "", *, solint: str = "30s", smoothtype: str = "median",
               smoothtime: float = 1800.0, **kwargs) -> Optional[CalTable]:
@@ -1804,7 +2145,8 @@ class CasaCalibrationOps(CalibrationOps):
             antenna_ids = np.asarray(handle.getcol("ANTENNA_ID"))
             meta = metadata or self.backend.data.get_metadata(project_code, [], "")
             for row in too_long:
-                name = names[int(antenna_ids[row])] if int(antenna_ids[row]) < len(names) else f"#{int(antenna_ids[row])}"
+                number = int(antenna_ids[row])
+                name = names[number] if number < len(names) else f"#{number}"
                 kind = str(handle.getcell("TYPE", int(row))).upper()
                 gain = np.asarray(handle.getcell("GAIN", int(row)), dtype=float)            # (npol, n_poly)
                 el_lo, el_hi = antenna_elevation_range(meta, name)
@@ -1921,6 +2263,130 @@ class CasaCalibrationOps(CalibrationOps):
                           "solutions had to be de-spiked; check the table plot")
         return table
 
+    def smooth_fringe(self, project_code: str, table: CalTable, *, window: float = 900.0,
+                      smoothtype: str = "median", parameters: tuple = FRINGE_SMOOTH_PARAMETERS,
+                      min_points: int = 3, metadata: Optional[ObsMetadata] = None,
+                      **kwargs) -> CalTable:
+        """Smooth a fringe table's delay and rate in time; return the smoothed copy.
+
+        The multi-band delay is solved once per solution interval, so each
+        solution carries the full noise of one interval while the quantity it
+        measures — the residual atmospheric delay and its rate — varies slowly
+        and smoothly. Averaging each solution with its neighbours in time
+        therefore removes noise rather than signal, and it is the smoothed table
+        that should be applied: an unsmoothed per-scan delay transfers its own
+        scatter onto the target.
+
+        A centred boxcar in time (:func:`~vlbipy.statistics.smooth_in_time`) is
+        used per antenna, subband, polarization *and field*. Grouping by field
+        matters: the residual delay is a function of direction, so solutions on
+        the fringe finder and on the phase calibrator must not be averaged
+        together. The phase is never smoothed (it wraps), flagged solutions take
+        no part and stay flagged — unlike CASA's ``smoothcal``, which unflags
+        them — and the original table is left untouched on disk so both can be
+        plotted and compared.
+
+        Parameters
+        ----------
+        project_code : str
+            Project code (the smoothed table is written next to the original).
+        table : CalTable
+            The fringe table to smooth; not modified.
+        window : float
+            Full width of the smoothing window in seconds; <= 0 returns ``table``
+            unchanged (``[calibration.mbd_smooth].window``).
+        smoothtype : str
+            ``"median"`` (robust, default) or ``"mean"``.
+        parameters : tuple of str
+            Which Fringe Jones parameters to smooth; names of
+            :data:`FRINGE_PARAMETERS`. Defaults to the delay and the rate.
+        min_points : int
+            Leave a solution untouched when its window holds fewer than this many
+            usable solutions, so an isolated scan is never "smoothed" with itself.
+        metadata : ObsMetadata, optional
+            Unused; accepted so the call site can forward it like the other steps.
+
+        Returns
+        -------
+        CalTable
+            A table of the same ``cal_type`` pointing at ``<code>.<type>_smooth``,
+            carrying over the field mapping, interpolation and spw map of the
+            input. The input table is returned unchanged when nothing was smoothed.
+        """
+        from ..statistics import smooth_in_time
+
+        source = Path(table.path)
+        if not source.is_dir():
+            raise BackendError(f"{project_code}: calibration table {source} not found")
+        offsets = [FRINGE_PARAMETERS[name] for name in parameters if name in FRINGE_PARAMETERS]
+        unknown = [name for name in parameters if name not in FRINGE_PARAMETERS]
+        if unknown:
+            raise BackendError(f"{project_code}: unknown fringe parameter(s) {', '.join(unknown)}; "
+                               f"known: {', '.join(FRINGE_PARAMETERS)}")
+        if window <= 0 or not offsets:
+            logger.info("smooth_fringe[{}]: disabled (window={:g} s, parameters={}); applying the "
+                        "unsmoothed table", table.cal_type, window, ",".join(parameters) or "none")
+            return table
+        target = source.with_name(f"{source.name}_smooth")
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(source, target)
+
+        handle = self.backend.tools.table()
+        if not handle.open(str(target), nomodify=False):
+            raise BackendError(f"could not open {target} for writing")
+        try:
+            values = np.asarray(handle.getcol("FPARAM")).astype(float)   # (nparam, nchan, nrow)
+            flags = np.asarray(handle.getcol("FLAG")).astype(bool)
+            times = np.asarray(handle.getcol("TIME")).astype(float)
+            antenna_ids = np.asarray(handle.getcol("ANTENNA1"))
+            spw_ids = np.asarray(handle.getcol("SPECTRAL_WINDOW_ID"))
+            field_ids = np.asarray(handle.getcol("FIELD_ID"))
+            n_param = values.shape[0]
+            stride = 4 if n_param % 4 == 0 else n_param
+            n_pol = max(1, n_param // stride)
+            n_changed, n_total = 0, 0
+            for antenna in np.unique(antenna_ids):
+                for spw in np.unique(spw_ids):
+                    for field in np.unique(field_ids):
+                        rows = np.flatnonzero((antenna_ids == antenna) & (spw_ids == spw)
+                                              & (field_ids == field))
+                        if rows.size < 2:
+                            continue
+                        order = rows[np.argsort(times[rows])]
+                        for pol in range(n_pol):
+                            for offset in offsets:
+                                index = pol * stride + offset
+                                if index >= n_param:
+                                    continue
+                                for channel in range(values.shape[1]):
+                                    series = np.where(flags[index, channel, order], np.nan,
+                                                      values[index, channel, order])
+                                    smoothed, changed = smooth_in_time(
+                                        series, times[order], window=window, kind=smoothtype,
+                                        min_points=min_points)
+                                    moved = changed & np.isfinite(smoothed)
+                                    values[index, channel, order[moved]] = smoothed[moved]
+                                    n_changed += int(moved.sum())
+                                    n_total += int(np.isfinite(series).sum())
+            handle.putcol("FPARAM", values)
+            handle.flush()
+        finally:
+            handle.close()
+
+        logger.info("smooth_fringe[{}]: {} of {} {} solution(s) smoothed with a {:g} s centred "
+                    "{} -> {}", table.cal_type, n_changed, n_total, "/".join(parameters), window,
+                    smoothtype, target.name)
+        if not n_total:
+            warnings.warn(f"{project_code}: the {table.cal_type} table has no unflagged solution to "
+                          "smooth; applying it unsmoothed")
+            shutil.rmtree(target, ignore_errors=True)
+            return table
+        return CalTable(cal_type=table.cal_type, path=str(target), field=table.field,
+                        gainfield=table.gainfield, interp=table.interp, spwmap=list(table.spwmap),
+                        snr=self._median_table_snr(target), calwt=table.calwt,
+                        apply_to=table.apply_to)
+
     def initial_calibration(self, project_code: str, field: str, refant: str, *,
                             scans: Optional[list] = None, gaintable: Optional[list] = None,
                             channel_fraction: float = 0.8, solint: str = "inf",
@@ -1992,6 +2458,11 @@ class CasaCalibrationOps(CalibrationOps):
         return CalTable(cal_type=suffix, path=str(table_path), field=field, interp="nearest",
                         snr=self._median_table_snr(table_path))
 
+    def _field_of_scan(self, meta: ObsMetadata, scan_number: int) -> str:
+        """Return the source observed in a scan ("" when the metadata does not list it)."""
+        scan = next((s for s in meta.scans if s.scan_number == int(scan_number)), None)
+        return scan.source if scan is not None else ""
+
     def _solve_window(self, meta: ObsMetadata, scan_number: int, max_window_sec: float) -> str:
         """CASA ``timerange`` for the central ``max_window_sec`` of a scan ("" = whole scan when shorter)."""
         scan = next((s for s in meta.scans if s.scan_number == scan_number), None)
@@ -2022,14 +2493,17 @@ class CasaCalibrationOps(CalibrationOps):
             first = index == 0
             antennas = list(stage["antennas"]) + ([] if first else [stage["refant"]])
             target = table_path if first else table_path.with_name(f"{table_path.name}.stage{index + 1}")
-            params = dict(base, caltable=str(target), scan=str(stage["scan"]), refant=stage["refant"],
-                          antenna=",".join(antennas) + "&",
+            # The field must match the stage's own scan: stages may come from different
+            # sources (the brightest source need not detect every antenna), and a field
+            # that excludes the stage's source selects no data at all.
+            field = self._field_of_scan(meta, stage["scan"]) or base.get("field", "")
+            params = dict(base, field=field, caltable=str(target), scan=str(stage["scan"]),
+                          refant=stage["refant"], antenna=",".join(antennas) + "&",
                           timerange=self._solve_window(meta, stage["scan"], max_window_sec))
-            logger.info("initial_calibration[{}] stage {}/{}: fringefit scan={} timerange={} antennas={} refant={}",
-                        suffix, index + 1, len(stages), stage["scan"], params["timerange"] or "whole scan",
-                        ",".join(antennas), stage["refant"])
-            self._fringefit(project_code, params, gaintable,
-                             field=base.get("field", ""), callib=callib)
+            logger.info("initial_calibration[{}] stage {}/{}: fringefit field={} scan={} timerange={} "
+                        "antennas={} refant={}", suffix, index + 1, len(stages), field, stage["scan"],
+                        params["timerange"] or "whole scan", ",".join(antennas), stage["refant"])
+            self._fringefit(project_code, params, gaintable, field=field, callib=callib)
             if not first:
                 added = self._rebase_and_append(table_path, target, meta, stage["refant"], stage["antennas"])
                 shutil.rmtree(target, ignore_errors=True)
@@ -3587,7 +4061,8 @@ class CasaFlagOps(FlagOps):
                     if samples.size < 5:
                         continue
                     scan = scan_info.get(int(scan_number))
-                    kind = "gapless" if scan and scan.time_start - previous_end[scan.scan_number] <= gapless_seconds else "gap"
+                    follows = bool(scan) and scan.time_start - previous_end[scan.scan_number] <= gapless_seconds
+                    kind = "gapless" if follows else "gap"
                     bad = off[samples]
                     lead = int(np.argmin(bad)) if not bad.all() else bad.size        # length of the leading run
                     begin = (scan.time_start if scan else times[samples[0]]) - step / 2.0
@@ -3633,7 +4108,8 @@ class CasaFlagOps(FlagOps):
             if typical[kind]:
                 logger.info("off source: typical arrival after the scan start in {} (applied to {}): {}", label,
                             ", ".join(wanted) or "no other field",
-                            ", ".join(f"{n} {s:.0f} s" for n, s in sorted(typical[kind].items(), key=lambda item: -item[1])))
+                            ", ".join(f"{n} {s:.0f} s"
+                                      for n, s in sorted(typical[kind].items(), key=lambda item: -item[1])))
         if dry_run or not commands:
             return report
         before = self.flagged_fraction(project_code)
@@ -4736,14 +5212,39 @@ class CasaPlotOps(PlotOps):
     """Diagnostic plots rendered from CASA tables with matplotlib."""
 
     def caltable(self, project_code: str, caltable: str, cal_type: str = "",
-                 metadata: Optional[ObsMetadata] = None) -> list[str]:
-        """Plot a calibration table to PNG(s) under <work_dir>/plots."""
-        from ..plotting import CalTablePlotter
-        meta = metadata or self.backend.data.get_metadata(project_code, [], "")
+                 metadata: Optional[ObsMetadata] = None, **kwargs) -> list[str]:
+        """Plot a calibration table to PNG(s) under <work_dir>/plots.
+
+        ``metadata`` gives the bandpass plots their frequency axis and the gain-curve plot the
+        elevations every antenna observed at; when it is not passed the measurement set is asked, and
+        when that is gone too the table is still plotted, without those. A gain-curve table is drawn
+        normalised by the station DPFUs recorded beside it (:func:`read_gain_curve_dpfu`), or by the
+        peak of each curve when it has no record.
+
+        Returns
+        -------
+        list of str
+            Paths of the PNG file(s) written.
+        """
+        from ..plotting import CalTablePlotter, is_gain_curve_table
+        meta = metadata if metadata is not None else self._metadata_from_ms(project_code)
         frequencies = {s: meta.freq_setup.frequencies_ghz(s)
-                       for s in range(meta.freq_setup.n_subbands)}
+                       for s in range(meta.freq_setup.n_subbands)} if meta is not None else {}
         plotter = CalTablePlotter(self.plot_dir("caltables"), frequencies=frequencies)
-        return [str(p) for p in plotter.plot(caltable, cal_type=cal_type)]
+        elevation_ranges, dpfu = {}, {}
+        if is_gain_curve_table(plotter.viscal(caltable)):
+            elevation_ranges = observed_elevation_ranges(meta) if meta is not None else {}
+            dpfu = read_gain_curve_dpfu(caltable)
+        return [str(p) for p in plotter.plot(caltable, cal_type=cal_type, elevation_ranges=elevation_ranges,
+                                             dpfu=dpfu)]
+
+    def _metadata_from_ms(self, project_code: str) -> Optional[ObsMetadata]:
+        """Metadata read from the measurement set, or None when it cannot be read (e.g. already deleted)."""
+        try:
+            return self.backend.data.get_metadata(project_code, [], "")
+        except Exception as exc:  # noqa: BLE001 - a plot goes without its extras rather than failing
+            logger.debug("{}: no metadata for the caltable plot ({})", project_code, exc)
+            return None
 
     def spectrum(self, project_code: str, *, field: str = "", scans: Optional[list] = None,
                  refant: str = "", column: str = "corrected", label: str = "",
@@ -4820,6 +5321,37 @@ class CasaPlotOps(PlotOps):
                                                    metadata=metadata, **kwargs)
         return [str(p) for p in plot_baseline_timeseries(
             series, self.plot_dir(self.category_for_column(column)), project_code, label=label)]
+
+    def time_evolution(self, project_code: str, *, refant: str, subband: int, column: str = "data",
+                       label: str = "raw", series: Optional[dict] = None,
+                       metadata: Optional[ObsMetadata] = None, source_roles: Optional[dict] = None,
+                       reason: str = "", **kwargs) -> str:
+        """Plot amplitude and phase vs time over the whole observation on every baseline to ``refant``.
+
+        One subband, coloured by source (:func:`~vlbipy.plotting.plot_time_evolution`). ``series`` is the
+        output of :meth:`CasaDataOps.read_time_evolution` when the caller has read it already; otherwise
+        it is read here. ``source_roles`` (``{source: role}``) labels the legend and ``reason`` (why this
+        reference antenna and subband) goes under the title.
+
+        Returns
+        -------
+        str
+            Path of the PNG, ``<code>.<label>.time_evolution.ref<ANT>.spw<N>.png``.
+        """
+        from time import monotonic
+
+        from ..plotting import plot_time_evolution
+        if series is None:
+            series = self.backend.data.read_time_evolution(project_code, refant=refant, subband=subband,
+                                                           column=column, metadata=metadata)
+        started = monotonic()
+        outfile = plot_time_evolution(series, self.plot_dir(self.category_for_column(column)), project_code,
+                                      label=label, source_roles=source_roles, reason=reason)
+        logger.info("time evolution figure: refant={} subband={} baselines={} samples={} seconds={:.1f} file={}",
+                    series["refant"], series["subband"], len(series["antennas"]) - len(series.get("notes") or {}),
+                    series["n_samples"], float(series.get("read_seconds") or 0.0) + monotonic() - started,
+                    outfile.name)
+        return str(outfile)
 
     def baseline_corner(self, project_code: str, *, field: str = "", column: str = "corrected",
                         quantity: str = "phase", max_time_bins: int = 200, label: str = "",

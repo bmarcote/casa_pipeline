@@ -41,6 +41,11 @@ from ..results import Image, SelfcalResult
 _NON_OPERATIONS = frozenset({"group", "kind", "work_dir", "backend", "operations",
                              "implemented", "supports"})
 
+#: Fraction of the channels of a subband, in its middle, that the raw time-evolution figures average
+#: over. Before the fringe fit the residual delay winds the phase across the band, so only a narrow
+#: central window keeps the vector average coherent.
+TIME_EVOLUTION_CHANNEL_FRACTION = 0.25
+
 
 class BackendComponent:
     """Base class for one operation group of a backend.
@@ -270,6 +275,27 @@ class DataOps(BackendComponent):
         """Return amplitude/phase vs time per baseline, optionally restricted to exact scans."""
         raise self._unsupported("read_timeseries")
 
+    def read_time_evolution(self, project_code: str, *, refant: str, subband: int, column: str = "data",
+                            channel_fraction: float = TIME_EVOLUTION_CHANNEL_FRACTION, **kwargs) -> dict:
+        """Return every baseline to ``refant`` in one subband over the whole observation, per integration.
+
+        All sources, parallel hands only, vector-averaged over the unflagged central ``channel_fraction``
+        of the subband and not averaged in time; flagged and never-recorded samples are dropped.
+
+        Returns
+        -------
+        dict
+            ``refant``, ``subband``, ``column``, ``polarizations`` (hand labels), ``antennas`` (every other
+            antenna with data, the panel order), ``baselines`` (``{antenna: {"times": MJD seconds,
+            "scans": scan number per sample, "vis": complex (n_sample, n_hand)}}``, in time order and with
+            the reference antenna first in the baseline), ``notes`` (``{antenna: why it has no data}``),
+            ``scan_sources`` (``{scan number: source}``), ``sources`` (every source of the observation),
+            ``scans_with_data`` (scans with an unflagged sample on any baseline), ``channels`` (first and
+            last channel averaged), ``n_channels``, ``frequency_ghz`` and ``bandwidth_mhz`` of that window,
+            ``time_range`` (of the observation) and ``n_samples``.
+        """
+        raise self._unsupported("read_time_evolution")
+
     def read_dynamic_spectra(self, project_code: str, *, field: str = "",
                              column: str = "corrected", max_time_bins: int = 200,
                              stokes_i: bool = True, **kwargs) -> dict:
@@ -364,6 +390,16 @@ class CalibrationOps(BackendComponent):
     def smooth(self, project_code: str, table: CalTable, **kwargs) -> CalTable:
         """Smooth an existing calibration table (delay/rate noise reduction)."""
         raise self._unsupported("smooth")
+
+    def smooth_fringe(self, project_code: str, table: CalTable, **kwargs) -> CalTable:
+        """Smooth a fringe table's delay and rate in time and return the table to apply.
+
+        The multi-band delay is solved per interval but measures a slowly varying
+        atmospheric quantity, so neighbouring solutions average down its noise.
+        Backends return the smoothed table (ideally a copy, leaving the solved one
+        on disk for comparison), or the input unchanged when they cannot smooth.
+        """
+        return table
 
     def apply(self, project_code: str, field: str, tables: list[CalTable], **kwargs) -> None:
         """Apply the accumulated calibration tables to a field.
@@ -565,8 +601,12 @@ class PlotOps(BackendComponent):
         """
         raise self._unsupported(f"diagnostic[{kind}]")
 
-    def caltable(self, project_code: str, caltable: str, cal_type: str = "") -> list[str]:
-        """Plot one calibration table to PNG file(s); return their paths."""
+    def caltable(self, project_code: str, caltable: str, cal_type: str = "", **kwargs) -> list[str]:
+        """Plot one calibration table to PNG file(s); return their paths.
+
+        ``kwargs`` carries ``metadata`` (the observation's :class:`~vlbipy.models.ObsMetadata`), which a
+        backend may use for physical axes; one that has no use for it ignores it.
+        """
         raise self._unsupported("caltable")
 
     def scan_snr(self, project_code: str, survey: Optional[ScanSNRSurvey] = None,
@@ -599,6 +639,16 @@ class PlotOps(BackendComponent):
                    **kwargs) -> list[str]:
         """Plot amplitude/phase vs time per baseline for an optional scan selection."""
         raise self._unsupported("timeseries")
+
+    def time_evolution(self, project_code: str, *, refant: str, subband: int, column: str = "data",
+                       label: str = "raw", series: Optional[dict] = None, **kwargs) -> str:
+        """Plot amplitude and phase vs time over the whole observation for every baseline to ``refant``.
+
+        One subband, coloured by source (see :meth:`DataOps.read_time_evolution` for the data). ``series``
+        is that data when the caller has already read it. The file is named
+        ``<code>.<label>.time_evolution.ref<ANT>.spw<N>.png``, which is how the dashboard finds it.
+        """
+        raise self._unsupported("time_evolution")
 
     def subband_phases(self, project_code: str, *, fields: list[str], refant: str, column: str = "corrected",
                        label: str = "", **kwargs) -> str:

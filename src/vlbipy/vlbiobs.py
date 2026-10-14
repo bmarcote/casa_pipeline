@@ -584,9 +584,12 @@ class VLBIObs:
         results = [o.listobs(listfile=listfile) for o in self._observations]
         return results[0] if len(results) == 1 else results
 
-    def notebook(self) -> list[str]:
-        """Write the interactive reduction notebook of every observation (see :mod:`vlbipy.notebook`)."""
-        return [o.notebook() for o in self._observations]
+    def notebook(self, embed: bool = True) -> list[str]:
+        """Write the interactive reduction notebook of every observation (see :mod:`vlbipy.notebook`).
+
+        ``embed=True`` stores the plots in each notebook (self-contained); ``False`` links them by relative path.
+        """
+        return [o.notebook(embed=embed) for o in self._observations]
 
     def report(self) -> list[dict]:
         """Return per-observation report dicts (no files written in dummy mode)."""

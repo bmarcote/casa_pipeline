@@ -48,6 +48,13 @@ table is de-spiked (and optionally smoothed) before it enters the chain, and
 each table is plotted per antenna. Refuses to run if the data has no Tsys /
 gain-curve information to calibrate from.
 
+The gain-curve plot shows each curve divided by the DPFU of its antenna, against
+elevation: a healthy curve sits near 1 whatever the size of the dish. The
+elevations the antenna actually observed are shaded; a polynomial that had to
+be shortened for CASA is only meaningful there. The DPFUs are kept in
+`caltables/<code>.gcal.dpfu.json`; for a table made before that file existed
+the curve is divided by its peak instead, and the plot says so.
+
 ### `flag.apriori`
 
 Applies the observatory's a-priori flag table (`.uvflg` for EVN/LBA — VLBA's
@@ -66,6 +73,24 @@ chosen so that all of those antennas are covered — using several linked
 scans when no single scan covers the whole array. Falls back from fringe
 finders to phase calibrators to targets if the fringe finders don't yield a
 usable scan.
+
+Detected is not the same as on source. An antenna sitting in a sidelobe of a
+bright fringe finder still gives fringes, and its fringe SNR hardly drops
+(the survey's SNR follows the coherence of the phases, not the amplitude). So
+the amplitudes are compared as well: each antenna's raw amplitude in a scan
+against its own best scan of the same source, split per antenna so that a
+weak partner does not count against it. Below `[calibration].weak_scan_level`
+(default 0.3) the antenna is not solved on that scan and gets another one.
+
+The choice is made once, on the first pass, and reused by the later passes
+(re-surveying data that has been flagged in the meantime only makes the
+detectable set shrink). One thing reopens it: an antenna whose data in the
+scan it is solved on has since been flagged — typically an antenna that was
+detected there but not properly on source, which the off-source flagging
+removes. Left alone it would get no instrumental solution and lose all its
+data when the calibration is applied. It is given another scan instead,
+linked through an antenna that is still solved; the other antennas keep
+theirs.
 
 ### `calibrate.instrumental`
 
@@ -167,6 +192,17 @@ spectra on the fringe-finder scans, spectra and time series on baselines to
 the reference antenna, corner plots, radplot, uv coverage) and again on the
 calibrated data. A failing plot is reported as a warning; it never aborts
 the reduction.
+
+The raw set also holds the time evolution of the whole observation
+(`plot.time_evolution()`): amplitude and phase against time on every baseline
+to the reference antenna, coloured by source, vector-averaged over the central
+channels of a subband every antenna recorded. When the reference antenna did
+not observe the whole time, or its data show stretches without unflagged
+samples or without fringes, the same figure is made for a second (or third)
+reference antenna, the one with the highest fringe SNR among those that cover
+the gap; when no subband was recorded by every antenna, further subbands are
+added until each antenna appears. A resumed run whose raw diagnostics were
+made before this figure existed adds it once.
 
 ### `export.per_source`
 

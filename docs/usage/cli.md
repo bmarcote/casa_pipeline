@@ -15,6 +15,8 @@ vlbipy <command> -p <project> [-t TARGET] [--phasecal NAME] [--fringe-finder NAM
 | `flag` | run flagging modes |
 | `plot` | produce diagnostic plots |
 | `export` | split per source and export |
+| `report` | rebuild the HTML report and `summary.md` from the products on disk (see [below](#the-report)) |
+| `notebook` | write the reduction notebook `<work_dir>/<code>.ipynb` (see [below](#the-reduction-notebook)) |
 
 `vlbipy --version` prints the installed version, which is the `version` written
 in `pyproject.toml`.
@@ -73,6 +75,70 @@ project directory. The calibration chain itself is persisted alongside it in
 steps produced rather than starting from uncalibrated data. Resuming from a step
 drops the tables that step and the ones after it had produced, since they are
 about to be re-derived.
+
+## The report
+
+```bash
+vlbipy report -p rsm07            # rebuild <work_dir>/html/ and <work_dir>/summary.md
+vlbipy report -p rsm07 --open     # ... and open the overview in the browser
+```
+
+The same report is written at the end of every `run`. It is built from the
+products and caches on disk, so it can be rebuilt after the measurement set
+has been deleted. `html/` links the plots by relative path and has to stay
+next to `plots/` and `images/`.
+
+| Page | Content |
+|---|---|
+| Overview | observation setup, **general comments**, antennas (subbands, data health), sources, scans with the fringe SNR of every antenna |
+| Diagnostics | three sub-tabs on the raw data: auto-correlations and cross-correlations of the diagnostic scans, and the **time evolution** of the whole observation |
+| Calibration | the calibration chain, the **amplitude corrections** of the self-calibration, every calibration-table plot, calibrated calibrator data |
+| Final results | per source: downloads, uv coverage, radplots, spectra, light curves, images |
+
+**General comments** lists what the reduction found, and opens `summary.md`
+as well: which scan the instrumental delay was solved on and which antennas
+were solved there; per antenna, missing data or missing fringes with their UTC
+range and scan numbers, a partial band, a dead polarization, heavy flagging,
+amplitude corrections beyond 10% (and corrections the self-calibration could
+not constrain); per source, the detection and image statistics; and the
+warnings the pipeline raised during the run (kept in `.run_warnings.json`).
+Before the pipeline has run, `summary.md` only says that the section is still
+to come.
+
+**Amplitude corrections** is one table per self-calibrated source: the factor
+the difmapy gscale applied to each antenna in each subband (1.00 = unchanged),
+green within 10%, orange within 30%, red beyond, with the median over the
+subbands the antenna has a solution in as the last column.
+
+**Time evolution** shows the raw amplitude and phase against time on every
+baseline to a reference antenna, coloured by source, vector-averaged over the
+central channels of one subband, with the two parallel hands side by side. A
+second reference antenna (the one with the highest fringe SNR) is added when
+the first did not observe the whole time or has stretches without data or
+fringes, and a second subband when not every antenna recorded the first.
+
+## The reduction notebook
+
+```bash
+vlbipy notebook -p rsm07          # write <work_dir>/rsm07.ipynb and print its path
+vlbipy notebook -p rsm07 --open   # ... and launch JupyterLab on it
+vlbipy notebook -p rsm07 --link   # link the plots instead of embedding them
+```
+
+The same notebook is written after the import and at the end of every `run`. It
+needs no kernel to be read: each step that ran is a section with what it did,
+its status and the plots it produced, followed by the calibrated data (uv
+coverage, radplots, spectra, light curves, images). The plots are embedded, so
+the notebook is self-contained (typically 10–30 MB) and can be moved or sent on
+its own; it shows them as they were when it was written. `--link` links them by
+relative path instead: a small notebook that has to stay next to `plots/`,
+`images/` and `selfcal/`. A repeated step overwrites its plots, so a section
+always shows the latest ones.
+
+Executing cells is only needed to act on the data: every step has the call that
+re-runs it (`FORCE = False` keeps *Run All* safe), and the last sections flag
+calibration-table solutions and visibilities interactively and resume the
+pipeline. This needs the `notebook` extra (`pip install "vlbipy[notebook]"`).
 
 ## Configuration file
 

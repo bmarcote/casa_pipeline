@@ -70,6 +70,7 @@ project code; for a single project it returns the value itself.
 ```
 <work_dir>/
 ├── <code>.ms                 measurement set
+├── <code>.ipynb              reduction notebook: every step with its plots
 ├── caltables/                calibration tables
 ├── caltables.txt             CASA cal library: what was applied, in order
 ├── callibs/                  one cal library per solve: what it solved on top of
@@ -87,6 +88,15 @@ project code; for a single project it returns the value itself.
 Nothing is written outside the project directory: CASA's log is redirected into
 `logs/` and any stray `casa*.log` is swept up, so the directory you launch from
 stays clean.
+
+`<code>.ipynb` is rewritten after the import and at the end of every run (or on
+demand with `vlbipy notebook`). Opened in Jupyter it shows, without running
+anything, each step that ran with the plots it produced and the calibrated data
+at the end. The plots are embedded, so the notebook is self-contained (typically
+10–30 MB) and can be moved or sent on its own; `vlbipy notebook --link` writes a
+small one that links them by relative path and has to stay in the project
+directory. Its code cells — re-running a step, interactive flagging, resuming
+the pipeline — are optional.
 
 ### The cal libraries
 

@@ -50,6 +50,7 @@ parang = true                # Apply parallactic angle correction throughout
 ionos = true                 # Solve the dispersive delay below ionos_max_ghz
 ionos_max_ghz = 8.0          # The ionosphere matters below this observing frequency
 detection_snr = 7.0          # Fringe SNR above which an antenna counts as detected
+weak_scan_level = 0.3        # Below this fraction of its own best scan an antenna is not solved on a scan
 
 [calibration.sbd]
 solint = "inf"               # Solution interval for the instrumental delay
@@ -168,6 +169,7 @@ Settings shared by every calibration step.
 | `tsys_outlier_sigma` | float | `6.0` | MAD sigmas beyond which a Tsys solution is an outlier |
 | `tsys_smooth_passes` | int | `3` | Maximum de-spiking passes |
 | `detection_snr` | float | `7.0` | Fringe SNR above which an antenna counts as detected |
+| `weak_scan_level` | float | `0.3` | An antenna whose raw amplitude in a scan is below this fraction of its own best scan of that source is not solved on that scan, however well it is detected (`0` = no check) |
 | `require_all_subbands` | bool | `true` | Only calibrate on antennas that recorded the whole band |
 
 !!! note "Passing anything the backend accepts"

@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import math
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -22,7 +23,8 @@ from ..logging_utils import get_logger
 from ..models import (Antenna, CalTable, FreqSetup, ObsMetadata, QualityMetrics, Scan,
                       ScanSNRSurvey, Stokes)
 from ..results import Image, SelfcalResult
-from .base import (Backend, CalibrationOps, DataOps, ExportOps, FlagOps, ImagingOps, PlotOps)
+from .base import (TIME_EVOLUTION_CHANNEL_FRACTION, Backend, CalibrationOps, DataOps, ExportOps, FlagOps,
+                   ImagingOps, PlotOps)
 
 logger = get_logger()
 
@@ -192,6 +194,46 @@ class DummyDataOps(DataOps):
         _log("read_total_visibility", project=project_code, fields=",".join(wanted), column=column)
         return {"sources": sources, "column": column, "time_start": meta.time_range[0]}
 
+    def read_time_evolution(self, project_code: str, *, refant: str, subband: int, column: str = "data",
+                            channel_fraction: float = TIME_EVOLUTION_CHANNEL_FRACTION, metadata=None,
+                            **kwargs) -> dict:
+        """Fabricate a constant, fully coherent series on every baseline to ``refant`` (one subband).
+
+        Every antenna that recorded the subband gets one sample per integration of every scan it shares
+        with the reference antenna; the others get an empty series and a note, as a real backend does.
+        """
+        import numpy as np
+        meta = metadata or self.get_metadata(project_code, [], "EVN")
+        n_chan = meta.freq_setup.n_channels
+        n_edge = int(round(n_chan * (1.0 - channel_fraction) / 2.0))
+        hands = [p.name for p in meta.freq_setup.polarizations if p.name in ("RR", "LL", "XX", "YY")]
+        others = [a.name for a in meta.observed_antennas if a.name != refant]
+        baselines, notes, with_data = {}, {}, set()
+        for index, name in enumerate(others):
+            recorded = meta.antennas[name].subbands
+            times, scans = [], []
+            for scan in meta.scans:
+                if refant not in scan.antennas or name not in scan.antennas or (recorded and subband not in recorded):
+                    continue
+                step = max(scan.integration_time, 1.0)
+                count = int(scan.duration_sec // step)
+                times.extend(scan.time_start + k * step for k in range(count))
+                scans.extend([scan.scan_number] * count)
+                with_data.add(scan.scan_number)
+            flux = 0.01 * (1 + index)
+            baselines[name] = {"times": np.asarray(times, dtype=float), "scans": np.asarray(scans, dtype=np.int32),
+                               "vis": np.full((len(times), len(hands)), flux, dtype=np.complex64)}
+            if not times:
+                notes[name] = "subband not recorded" if recorded and subband not in recorded else "no unflagged data"
+        _log("read_time_evolution", project=project_code, refant=refant, subband=subband, column=column)
+        return {"refant": refant, "subband": int(subband), "column": column, "polarizations": hands,
+                "antennas": others, "baselines": baselines, "notes": notes,
+                "scan_sources": {s.scan_number: s.source for s in meta.scans}, "sources": list(meta.source_names),
+                "scans_with_data": sorted(with_data), "channels": [n_edge, n_chan - 1 - n_edge], "n_channels": n_chan,
+                "frequency_ghz": meta.freq_setup.freq_ghz,
+                "bandwidth_mhz": (n_chan - 2 * n_edge) * meta.freq_setup.channel_width / 1e6,
+                "time_range": list(meta.time_range), "n_samples": sum(len(b["times"]) for b in baselines.values())}
+
     def listobs(self, project_code: str, listfile: Optional[str] = None) -> dict:
         """Return a synthetic scan listing matching :meth:`get_metadata` (no file written)."""
         meta = self.get_metadata(project_code, [], "EVN")
@@ -298,6 +340,19 @@ class DummyCalibrationOps(CalibrationOps):
         """Return the table unchanged, logging the smoothing that would happen."""
         _log("smooth", project=project_code, caltable=table.cal_type, **kwargs)
         return table
+
+    def smooth_fringe(self, project_code: str, table: CalTable, *, window: float = 900.0,
+                      **kwargs) -> CalTable:
+        """Return a table standing in for the time-smoothed fringe solutions.
+
+        No solutions exist to smooth on this backend, so the path only gains the
+        ``_smooth`` suffix the real backends use — enough for the apply chain and
+        the report to show which table is being applied.
+        """
+        _log("smooth_fringe", project=project_code, caltable=table.cal_type, window=window, **kwargs)
+        if window <= 0 or not table.path:
+            return table
+        return replace(table, path=f"{table.path}_smooth")
 
     def apply(self, project_code: str, field: str, tables: list[CalTable], **kwargs) -> None:
         """Log the applycal that would run."""
@@ -444,8 +499,8 @@ class DummyPlotOps(PlotOps):
         _log(f"plot[{kind}]", project=project_code, output=path, **kwargs)
         return path
 
-    def caltable(self, project_code: str, caltable: str, cal_type: str = "") -> list[str]:
-        """Return the path a real caltable plot would be written to."""
+    def caltable(self, project_code: str, caltable: str, cal_type: str = "", **kwargs) -> list[str]:
+        """Return the path a real caltable plot would be written to (``kwargs`` such as ``metadata`` are unused)."""
         name = Path(caltable).name if caltable else cal_type
         path = _synthetic_path(self.plot_dir("caltables"), f"{name}.png")
         _log("plot_caltable", project=project_code, caltable=caltable, output=path)
@@ -508,6 +563,16 @@ class DummyPlotOps(PlotOps):
                                f"{project_code}{tag}.timeseries.png")
         _log("plot[timeseries]", project=project_code, field=field, column=column, output=path)
         return [path]
+
+    def time_evolution(self, project_code: str, *, refant: str, subband: int, column: str = "data",
+                       label: str = "raw", series: Optional[dict] = None, **kwargs) -> str:
+        """Return the path a real time-evolution figure would be written to (``kwargs`` are unused)."""
+        from ..plotting import time_evolution_filename
+        path = _synthetic_path(self.plot_dir(self.category_for_column(column)),
+                               time_evolution_filename(project_code, refant, subband, label))
+        _log("plot[time_evolution]", project=project_code, refant=refant, subband=subband, column=column,
+             output=path)
+        return path
 
     def baseline_corner(self, project_code: str, *, field: str = "", column: str = "corrected",
                         quantity: str = "phase", label: str = "", **kwargs) -> str:

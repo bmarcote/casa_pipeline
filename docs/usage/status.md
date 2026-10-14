@@ -28,6 +28,7 @@ antennas, 4 × 64 channels) on the CASA backend unless noted.
 | Polarization-aware instrumental calibration | an antenna with one dead polarization, or one that appears only in other scans, keeps what it has |
 | Campaigns | per-epoch calibration, joint phase-calibrator model, per-epoch refinement, combined images (`combine()`) |
 | Bookkeeping | persistent step state and calibration chain, resume / `--from-step` / `--scratch`, run log |
+| Dashboard & notebook | static HTML report (`vlbipy report`) and a Jupyter notebook (`vlbipy notebook`) showing every step with its plots; both rebuilt at the end of each run |
 
 ## Not implemented
 
@@ -40,7 +41,6 @@ antennas, 4 × 64 channels) on the CASA backend unless noted.
 - **VLBA / LBA automatic download** — manual-download instructions only. The
   VLBA path (ACCOR, EOP) shares the DiFX code tested on LBA data but has not been
   run on VLBA data.
-- **Dashboard and Jupyter notebook generation.**
 
 ## Known limitations
 

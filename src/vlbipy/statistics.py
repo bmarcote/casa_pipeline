@@ -129,6 +129,61 @@ def despike(values: np.ndarray, *, threshold: float = 6.0, max_passes: int = 3,
     return cleaned, replaced
 
 
+def smooth_in_time(values: np.ndarray, times: np.ndarray, *, window: float = 900.0,
+                   kind: str = "median", min_points: int = 3) -> tuple[np.ndarray, np.ndarray]:
+    """Replace every point by the median/mean of the points within a time window around it.
+
+    A centred boxcar in *time* rather than in samples, because calibration
+    solutions are not evenly spaced: scans have gaps, and a sample-counted
+    window would reach minutes further on a sparse stretch than on a dense one.
+    A centred window leaves a linear drift unbiased, which matters because the
+    atmospheric delay and rate it is used on do drift linearly over a scan or two.
+
+    Points that are ``nan`` take no part in any window and come back ``nan``: a
+    flagged solution is a non-detection, and turning it into an average of its
+    neighbours would apply a number the data never supported.
+
+    Parameters
+    ----------
+    values : numpy.ndarray
+        Series to smooth (1-D); ``nan`` marks unusable points.
+    times : numpy.ndarray
+        Time of each point, same length as ``values``, any consistent unit.
+    window : float
+        Full width of the window in the units of ``times``; <= 0 returns the
+        input unchanged.
+    kind : str
+        ``"median"`` (robust, the default) or ``"mean"``.
+    min_points : int
+        Leave a point untouched when its window holds fewer usable points than
+        this, so a single isolated solution is never "smoothed" with itself.
+
+    Returns
+    -------
+    smoothed : numpy.ndarray
+        The smoothed series (``nan`` where the input was ``nan``).
+    changed : numpy.ndarray
+        Boolean mask of the points whose value actually moved.
+    """
+    series = np.asarray(values, dtype=float)
+    stamps = np.asarray(times, dtype=float)
+    smoothed = np.array(series, dtype=float, copy=True)
+    if window <= 0 or series.size == 0:
+        return smoothed, np.zeros(series.shape, dtype=bool)
+    if kind not in ("median", "mean"):
+        raise ValueError(f"unknown smoothing kind {kind!r} (use 'median' or 'mean')")
+    reduce = np.median if kind == "median" else np.mean
+    usable = np.isfinite(series)
+    half = 0.5 * float(window)
+    for index in np.flatnonzero(usable):
+        inside = usable & (np.abs(stamps - stamps[index]) <= half)
+        if int(inside.sum()) < max(1, int(min_points)):
+            continue
+        smoothed[index] = float(reduce(series[inside]))
+    changed = usable & (smoothed != series)
+    return smoothed, changed
+
+
 def find_flat_range(profile: np.ndarray, *, threshold: float = 6.0,
                     max_edge_fraction: float = 0.25) -> tuple[int, int]:
     """Return the ``(first, last)`` indices of the flat interior of a bandpass-like profile.
@@ -256,6 +311,54 @@ def antenna_on_source_fraction(ratio: np.ndarray, usable: np.ndarray, *, iterati
         denominator = np.einsum("ijt,jt->it", weight, gains ** 2) + prior
         gains = np.clip(0.5 * (gains + numerator / denominator), 0.0, 3.0)
     return gains, weight.sum(axis=1).astype(int)
+
+
+def weak_scans_per_antenna(amplitude: np.ndarray, scan_index: np.ndarray, *, level: float = 0.3,
+                            min_baselines: int = 2) -> dict:
+    """Find the scans of one source in which an antenna is far below its own best scan.
+
+    An antenna that is not properly on source (in a sidelobe, mispointed) can
+    still be *detected* on a bright fringe finder: the fringe SNR CASA reports
+    hardly drops (EM163: CM at 6% of its amplitude in one scan kept two thirds of
+    its SNR), so a search on SNR alone takes such a scan for a good one. The
+    amplitude does show it. Every baseline's level in a scan (median over the
+    scan) is divided by its level in its best scan, and those ratios are split
+    into one factor per antenna and scan (:func:`antenna_on_source_fraction`), so
+    that a weak partner or a baseline that resolves the source differently at
+    another hour angle is not held against the antenna.
+
+    Works on uncalibrated amplitudes: only the ratio between scans of the same
+    baseline is used. With a single scan there is nothing to compare with and
+    nothing is reported.
+
+    Parameters
+    ----------
+    amplitude : numpy.ndarray
+        ``(n_antenna, n_antenna, n_time)`` amplitudes of one source, symmetric, ``nan`` = no data.
+    scan_index : numpy.ndarray
+        Scan number of every time sample.
+    level : float
+        An antenna is weak in a scan when its factor is below this (1 = as in its best scan).
+    min_baselines : int
+        Factors resting on fewer baselines with data are not judged.
+
+    Returns
+    -------
+    dict
+        ``scans`` (scan numbers, the last axis of the rest), ``gains``
+        ``(n_antenna, n_scan)`` and ``weak`` (boolean, same shape).
+    """
+    import warnings
+    scans = np.unique(scan_index)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)           # all-nan slices: baselines without data
+        levels = np.stack([np.nanmedian(amplitude[:, :, scan_index == s], axis=2) for s in scans], axis=2)
+        best = np.nanmax(levels, axis=2)
+    best = np.where(best > 0, best, np.nan)
+    ratio = levels / best[:, :, np.newaxis]
+    gains, n_baselines = antenna_on_source_fraction(ratio, np.isfinite(best))
+    weak = (n_baselines >= int(min_baselines)) & (gains < level) if scans.size > 1 else np.zeros(gains.shape, bool)
+    return {"scans": scans, "gains": gains, "weak": weak}
 
 
 def detect_off_source(amplitude: np.ndarray, scan_index: np.ndarray, *, level: float = 0.8,

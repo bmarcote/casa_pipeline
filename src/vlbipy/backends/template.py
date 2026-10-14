@@ -227,8 +227,11 @@ class TemplatePlotOps(PlotOps):
         """
         raise NotImplementedError
 
-    def caltable(self, project_code: str, caltable: str, cal_type: str = "") -> list[str]:
-        """Plot one calibration table to PNG file(s) and return their paths."""
+    def caltable(self, project_code: str, caltable: str, cal_type: str = "", **kwargs) -> list[str]:
+        """Plot one calibration table to PNG file(s) and return their paths.
+
+        ``kwargs["metadata"]`` is the observation's metadata (may be None), for physical plot axes.
+        """
         raise NotImplementedError
 
 

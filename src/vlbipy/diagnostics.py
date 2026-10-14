@@ -2,9 +2,14 @@
 
 Renders the metadata read at import time as fixed-width text tables: sources,
 frequency setup, antenna participation, and a scan-by-scan listing. The report is
-written once per project by the import step and is the first thing to look at
-when a run behaves unexpectedly, so everything here is derived from
-:class:`~vlbipy.models.ObsMetadata` alone and never queries the data again.
+written by the import step and is the first thing to look at when a run behaves
+unexpectedly, so the tables are derived from :class:`~vlbipy.models.ObsMetadata`
+alone and never query the data again.
+
+The first section, "General Comments", is the exception: it lists the issues,
+decisions and results of the calibration (:mod:`vlbipy.comments`), which do not
+exist at import time. The import step leaves a placeholder there and the report
+(``vlbipy.dashboard.build_dashboard``) rewrites the file once the pipeline has run.
 """
 from __future__ import annotations
 
@@ -13,6 +18,7 @@ from typing import Optional
 
 from astropy import coordinates as coord
 
+from .comments import comments_text
 from .logging_utils import get_logger
 from .models import ObsMetadata
 from .sources import SourceSet
@@ -153,8 +159,9 @@ def source_summary(metadata: ObsMetadata, sources: Optional[SourceSet] = None) -
     return "\n".join(lines)
 
 
-def full_summary(metadata: ObsMetadata, sources: Optional[SourceSet] = None) -> str:
-    """Assemble the complete observation summary from all the sections above.
+def full_summary(metadata: ObsMetadata, sources: Optional[SourceSet] = None,
+                 comments: Optional[list[dict]] = None) -> str:
+    """Assemble the complete observation summary: the general comments, then all the sections above.
 
     Parameters
     ----------
@@ -162,17 +169,22 @@ def full_summary(metadata: ObsMetadata, sources: Optional[SourceSet] = None) -> 
         Populated observation metadata.
     sources : SourceSet, optional
         Configured sources, used to label source roles.
+    comments : list of dict, optional
+        General comments of the reduction (:func:`vlbipy.comments.build_comments`). None - the import
+        step, before anything is calibrated - leaves a note saying the section is filled in later.
 
     Returns
     -------
     str
-        The full report.
+        The full report, with "General Comments" as its first section.
     """
     start_mjd, end_mjd = (t / 86400.0 for t in metadata.time_range)
     return "\n".join([
         f"VLBI Observation Summary: {metadata.project_code}",
         f"Observing date: {metadata.obs_date}",
         f"Time range: MJD {start_mjd:.6f} - {end_mjd:.6f}",
+        "",
+        comments_text(comments, metadata.project_code, width=_RULER),
         "",
         source_summary(metadata, sources),
         "",
@@ -184,7 +196,8 @@ def full_summary(metadata: ObsMetadata, sources: Optional[SourceSet] = None) -> 
     ])
 
 
-def write_summary(metadata: ObsMetadata, output_file, sources: Optional[SourceSet] = None) -> Path:
+def write_summary(metadata: ObsMetadata, output_file, sources: Optional[SourceSet] = None,
+                  comments: Optional[list[dict]] = None) -> Path:
     """Write the full summary to a file, creating parent directories as needed.
 
     Parameters
@@ -195,6 +208,8 @@ def write_summary(metadata: ObsMetadata, output_file, sources: Optional[SourceSe
         Destination file (conventionally ``<work_dir>/summary.md``).
     sources : SourceSet, optional
         Configured sources, used to label source roles.
+    comments : list of dict, optional
+        General comments for the first section (see :func:`full_summary`); None before the pipeline has run.
 
     Returns
     -------
@@ -203,6 +218,7 @@ def write_summary(metadata: ObsMetadata, output_file, sources: Optional[SourceSe
     """
     path = Path(output_file)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(full_summary(metadata, sources) + "\n")
+    # UTF-8 explicitly: the comments quote the warnings of the pipeline, which are not all ASCII.
+    path.write_text(full_summary(metadata, sources, comments) + "\n", encoding="utf-8")
     logger.info("wrote observation summary to {}", path)
     return path

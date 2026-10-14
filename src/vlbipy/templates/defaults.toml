@@ -92,6 +92,8 @@ smooth_tsys = true           # de-spike the Tsys table after gencal
 tsys_outlier_sigma = 6.0     # MAD sigmas beyond which a Tsys solution is an outlier
 tsys_smooth_passes = 3       # maximum de-spiking passes
 detection_snr = 7.0          # fringe SNR above which an antenna counts as detected
+weak_scan_level = 0.3        # an antenna below this fraction of its own best scan (raw amplitude) is not
+                             # solved on that scan, however well it is detected (0 = do not check)
 callib = false               # use CASA cal-library files; false uses explicit parallel
                              # gaintable/gainfield/interp/spwmap/calwt parameters
 
@@ -127,6 +129,22 @@ channel_fraction = 0.8       # central channels used, as for the SBD: the edges 
                              # carry the least trustworthy phase, so they must not bias the
                              # delay. The solution is still applied across the whole band.
 zerorates = false            # atmospheric residuals vary in time: fit the rate
+
+# Time smoothing of the fringe (MBD, MBD2, ...) solutions. Each solution carries the noise
+# of one solution interval, while the residual atmospheric delay and rate it measures drift
+# slowly, so neighbouring solutions average that noise down. The smoothed copy
+# (<code>.mbd_smooth) is what gets applied; the solved table stays on disk and is plotted
+# next to it. The phase is never smoothed — it wraps.
+[calibration.mbd_smooth]
+window = 900.0               # full width of the centred time window in seconds (0 = apply unsmoothed).
+                             # With solint = "inf" there is one solution per scan, so this spans
+                             # window / cycle-time solutions: ~3 on a 5-minute phase-reference cycle.
+                             # Raise it (1800-3600) to average more noise down, as long as the
+                             # residual delay still drifts more slowly than that; a centred window
+                             # leaves a linear drift unbiased either way.
+smoothtype = "median"        # "median" (robust: also removes a single bad solution) or "mean"
+parameters = ["delay", "rate"]   # Fringe Jones parameters to smooth; "dispersive" may be added
+min_points = 3               # leave a solution alone when its window holds fewer than this
 
 # Reweighting (statwt) after the full chain is applied; the pipeline then flags outliers
 # again and re-solves everything (third pass). Set enabled = false to skip.

@@ -252,3 +252,74 @@ def test_matches_reference_casa_table(written):
         for col in ref_cols:
             assert mine_sub[col]["valueType"] == ref_subs[sub][col]["valueType"], (sub, col)
             assert mine_sub[col].get("ndim") == ref_subs[sub][col].get("ndim"), (sub, col)
+
+
+# -- time smoothing of the fringe (MBD) solutions ----------------------------------------------
+
+def test_smooth_in_time_averages_a_noisy_level_and_leaves_a_linear_drift_alone():
+    import numpy as np
+
+    from vlbipy.statistics import smooth_in_time
+
+    times = np.arange(10) * 100.0
+    noisy = np.array([1.0, 3.0, 1.0, 3.0, 1.0, 3.0, 1.0, 3.0, 1.0, 3.0])
+    smoothed, changed = smooth_in_time(noisy, times, window=500.0, kind="median", min_points=3)
+    assert changed.any() and smoothed.std() < noisy.std()
+    ramp = times * 0.01
+    kept, moved = smooth_in_time(ramp, times, window=500.0, kind="median", min_points=3)
+    # A centred median of a linear ramp is the ramp itself, away from the truncated edges.
+    assert np.allclose(kept[2:-2], ramp[2:-2]) and not moved[2:-2].any()
+
+
+def test_smooth_in_time_never_fills_a_flagged_point_or_an_isolated_one():
+    import numpy as np
+
+    from vlbipy.statistics import smooth_in_time
+
+    times = np.array([0.0, 100.0, 200.0, 10_000.0])
+    values = np.array([1.0, float("nan"), 3.0, 5.0])
+    smoothed, changed = smooth_in_time(values, times, window=500.0, min_points=2)
+    assert np.isnan(smoothed[1])                    # a non-detection stays a non-detection
+    assert smoothed[3] == 5.0 and not changed[3]    # alone in its window: left as solved
+    assert smoothed[0] == smoothed[2] == 2.0        # the pair averages to its own median
+
+
+def test_smooth_in_time_disabled_by_a_zero_window():
+    import numpy as np
+
+    from vlbipy.statistics import smooth_in_time
+
+    values = np.array([1.0, 9.0, 1.0])
+    smoothed, changed = smooth_in_time(values, np.arange(3.0), window=0.0)
+    assert (smoothed == values).all() and not changed.any()
+
+
+def test_smooth_in_time_rejects_an_unknown_filter():
+    import numpy as np
+    import pytest
+
+    from vlbipy.statistics import smooth_in_time
+
+    with pytest.raises(ValueError, match="boxcar|median|mean"):
+        smooth_in_time(np.array([1.0, 2.0]), np.array([0.0, 1.0]), window=10.0, kind="gaussian")
+
+
+def test_fringe_smoothing_is_wired_into_the_apply_chain_on_the_dummy_backend():
+    from vlbipy import VLBIObs
+
+    obs = VLBIObs(project="RSM07", network="EVN", backend="dummy", target="UNKNOWN")
+    obs.import_data()
+    observation = obs["RSM07"]
+    table = observation.calibrate.fringefit(plot=False)
+    assert table.path.endswith("_smooth")                      # the smoothed copy is what is applied
+    assert [t.path for t in observation.gaintables if t.cal_type == "mbd"] == [table.path]
+
+
+def test_fringe_smoothing_can_be_switched_off_in_the_configuration():
+    from vlbipy import VLBIObs
+
+    obs = VLBIObs(project="RSM07", network="EVN", backend="dummy", target="UNKNOWN",
+                  config={"calibration": {"mbd_smooth": {"window": 0.0}}})
+    obs.import_data()
+    table = obs["RSM07"].calibrate.fringefit(plot=False)
+    assert not table.path.endswith("_smooth")

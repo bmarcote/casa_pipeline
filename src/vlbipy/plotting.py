@@ -5,7 +5,7 @@ renders per-antenna diagnostic figures. It dispatches on the table's ``VisCal``
 keyword, so the same class serves every present and future caltable:
 
 * ``B TSYS``       -> Tsys vs time, one subplot per antenna, color per polarization
-* ``EPowerCurve``  -> gain-curve polynomial vs elevation, one subplot per antenna
+* ``EPowerCurve``  -> gain curve (divided by the DPFU) vs elevation, one subplot per antenna
 * ``Fringe Jones`` -> phase / delay / rate vs time (one PNG each), per antenna
 * ``G/B Jones``    -> amplitude and phase of the (complex) gains vs time/channel
 
@@ -15,6 +15,7 @@ shape as a secondary encoding, with recessive grids and shared axes per figure.
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 from typing import Optional, Union
 
@@ -95,11 +96,97 @@ def subplot_grid(n_panels: int, max_cols: int = 4) -> tuple[int, int]:
     return math.ceil(n_panels / ncols), ncols
 
 
-def evaluate_gain_curve(coefficients, elevation_deg) -> np.ndarray:
-    """Evaluate a gain-curve polynomial sum(c_k * el^k) over elevations in degrees."""
-    coefficients = np.asarray(coefficients, dtype=float)
+#: Elevations (deg) the gain curves are drawn over.
+GAIN_CURVE_ELEVATIONS = np.linspace(0.0, 90.0, 181)
+
+
+def is_gain_curve_table(viscal: str) -> bool:
+    """True when a ``VisCal`` keyword names a gain-curve table written by ``gencal(caltype='gc')``."""
+    return "POWERCURVE" in str(viscal).upper()
+
+
+def evaluate_gain_curve(coefficients, elevation_deg, *, variable: str) -> np.ndarray:
+    """Evaluate a gain-curve polynomial at elevations given in degrees.
+
+    Parameters
+    ----------
+    coefficients : sequence of float
+        Power-series coefficients ``c_0 .. c_n`` (trailing zeros are harmless).
+    elevation_deg : array-like
+        Elevations in degrees at which the curve is wanted.
+    variable : {"za", "el"}
+        What the polynomial is a function of, in degrees. ``"za"`` is the zenith angle (90 - elevation):
+        what CASA stores in an ``EPowerCurve`` table whatever the station declared, since
+        ``gencal(caltype='gc')`` re-expands an elevation polynomial in zenith angle when it writes the
+        table. ``"el"`` is the elevation: an ANTAB ``ELEV`` polynomial, or a ``GAIN_CURVE`` row of the
+        measurement set of TYPE ``POWER(EL)``.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``sum(c_k * x**k)`` with ``x`` the zenith angle or the elevation, shaped like ``elevation_deg``.
+    """
+    if variable not in ("za", "el"):
+        raise ValueError(f"the gain-curve variable must be 'za' or 'el', not {variable!r}")
     elevation_deg = np.asarray(elevation_deg, dtype=float)
-    return sum(c * elevation_deg ** k for k, c in enumerate(coefficients))
+    x = 90.0 - elevation_deg if variable == "za" else elevation_deg
+    return np.polynomial.polynomial.polyval(x, np.asarray(coefficients, dtype=float))
+
+
+def normalise_gain_curve(power_gain, observed, dpfu: Optional[float] = None) -> tuple[np.ndarray, float, str]:
+    """Scale a gain curve in K/Jy so that a healthy one sits near 1.
+
+    A gain-curve table holds ``DPFU x POLY``: a 25-m dish with a perfect curve sits near 0.1 there, which
+    says nothing about the curve. Dividing by the station's DPFU gives back ``POLY``. When the DPFU is not
+    known the curve is divided by its own peak over the elevations observed, which has the same shape but
+    tops at exactly 1 wherever that peak is.
+
+    Parameters
+    ----------
+    power_gain : array-like
+        ``DPFU x POLY`` on a grid of elevations.
+    observed : array-like of bool
+        Grid points inside the elevations the antenna observed at (all True when those are not known).
+        Outside them a polynomial refitted for CASA is meaningless, so they never set the peak.
+    dpfu : float, optional
+        Sensitivity of the station in K/Jy, when it is on record.
+
+    Returns
+    -------
+    (normalised, reference, kind)
+        The curve divided by ``reference``, the reference itself (K/Jy) and what it is: ``"DPFU"``,
+        ``"peak"``, or ``"unit"`` (reference 1.0) when neither gives a positive number.
+    """
+    power_gain = np.asarray(power_gain, dtype=float)
+    if dpfu is not None and np.isfinite(dpfu) and dpfu > 0:
+        return power_gain / float(dpfu), float(dpfu), "DPFU"
+    inside = power_gain[np.asarray(observed, dtype=bool) & np.isfinite(power_gain)]
+    peak = float(inside.max()) if inside.size else 0.0
+    if peak > 0:
+        return power_gain / peak, peak, "peak"
+    return power_gain, 1.0, "unit"
+
+
+def gain_curve_ylim(values, min_span: float = 0.05) -> tuple[float, float]:
+    """Y limits for normalised gains: they always contain 1.0 and leave a margin around ``values``.
+
+    Parameters
+    ----------
+    values : array-like
+        Normalised gains to keep in view - pass only those inside the observed elevations, so a
+        polynomial that diverges outside them cannot flatten the panel.
+    min_span : float
+        Smallest height of the axis, so a constant curve does not collapse it.
+
+    Returns
+    -------
+    (low, high)
+    """
+    values = np.asarray(values, dtype=float)
+    finite = values[np.isfinite(values)]
+    low, high = (min(float(finite.min()), 1.0), max(float(finite.max()), 1.0)) if finite.size else (1.0, 1.0)
+    margin = max(0.1 * (high - low), 0.5 * min_span)
+    return low - margin, high + margin
 
 
 def _parallel_hand_mean(values: np.ndarray, pol_labels: list) -> np.ndarray:
@@ -112,13 +199,14 @@ def _parallel_hand_mean(values: np.ndarray, pol_labels: list) -> np.ndarray:
     return np.nanmean(values[:, parallel or list(range(values.shape[1]))], axis=1)
 
 
-def _stacked_pair(figure, cell, height_ratios=(2, 1)):
+def _stacked_pair(figure, cell, height_ratios=(2, 1), sharex=None):
     """Split a gridspec cell into a gapless amplitude (top) / phase (bottom) pair sharing x.
 
-    Returns ``(amp_axis, phase_axis)``.
+    ``sharex`` ties the pair to the x axis of another axes, for figures whose panels all show the
+    same axis (one time axis for the whole observation). Returns ``(amp_axis, phase_axis)``.
     """
     inner = cell.subgridspec(2, 1, height_ratios=list(height_ratios), hspace=0)
-    amp_axis = figure.add_subplot(inner[0])
+    amp_axis = figure.add_subplot(inner[0], sharex=sharex)
     phase_axis = figure.add_subplot(inner[1], sharex=amp_axis)
     return amp_axis, phase_axis
 
@@ -296,6 +384,171 @@ def plot_baseline_timeseries(series: dict, plot_dir: Union[str, Path], project_c
         outfile_stem=f"{project_code}{suffix}.timeseries", dpi=dpi)]
 
 
+#: Fixed-order source colours of the time-evolution figures: Okabe-Ito without its yellow (which does not
+#: read on white) plus grey. A source keeps its colour in every panel and every figure of a run.
+SOURCE_COLORS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#56B4E9", "#E69F00", "#000000", "#999999")
+#: Legend wording of the source roles (``SourceType`` values).
+SOURCE_ROLE_NAMES = {"fringefinder": "fringe finder", "phasecal": "phase calibrator", "target": "target",
+                     "checksource": "check source", "polcal": "polarization calibrator"}
+#: Width (inches) of one polarization column and height of one baseline row of a time-evolution figure.
+#: The time axis spans the whole observation, so the panels are wide rather than many to a row.
+TIME_EVOLUTION_PANEL_WIDTH = 7.5
+TIME_EVOLUTION_ROW_HEIGHT = 1.9
+#: Height of the row of a baseline with nothing to draw, as a fraction of a normal row: it stays in the
+#: figure, so a missing antenna is seen to be missing, but as a one-line strip.
+TIME_EVOLUTION_EMPTY_ROW = 0.16
+
+
+def time_evolution_filename(project_code: str, refant: str, subband: int, label: str = "raw") -> str:
+    """File name of a time-evolution figure: ``<code>.<label>.time_evolution.ref<ANT>.spw<N>.png``.
+
+    The dashboard finds the figures by this name and reads the reference antenna and the subband back
+    from it, so the antenna code is kept free of dots: any character outside ``A-Z a-z 0-9 _ + -``
+    becomes ``_``.
+    """
+    antenna = re.sub(r"[^A-Za-z0-9_+-]", "_", str(refant))
+    return f"{project_code}.{label}.time_evolution.ref{antenna}.spw{int(subband)}.png"
+
+
+def plot_time_evolution(series: dict, plot_dir: Union[str, Path], project_code: str = "", *,
+                        label: str = "raw", source_roles: Optional[dict] = None, reason: str = "",
+                        dpi: int = 150) -> Path:
+    """Plot amplitude and phase vs time over the whole observation, for every baseline to one antenna.
+
+    One row per baseline to the reference antenna and one column per parallel hand; each cell is the
+    stacked amplitude / phase pair of the other per-baseline figures (:func:`_stacked_pair`). Every
+    panel shares the UTC time axis, which spans the whole observation, and the two hands of a baseline
+    share their amplitude scale. Colour is the source, the same in every panel and figure.
+
+    This is the first look at the data as correlated: when each station has signal, on which sources,
+    and in which hand. A detection shows as a band of amplitude and a phase that follows a track
+    (winding with the residual rate); a station without signal shows scattered phases and amplitudes
+    at the noise level, and a dead polarization shows it in one column only. A baseline with nothing
+    to draw keeps its row, reduced to a strip that says why.
+
+    Parameters
+    ----------
+    series : dict
+        Output of ``DataOps.read_time_evolution``: ``refant``, ``subband``, ``polarizations``,
+        ``antennas`` (the row order), ``baselines`` (``{antenna: {"times", "scans", "vis"}}``),
+        ``notes``, ``scan_sources``, ``sources`` (their order fixes the colours), ``time_range``,
+        ``channels``, ``n_channels``, ``frequency_ghz``, ``bandwidth_mhz`` and ``column``.
+    plot_dir : str or pathlib.Path
+        Directory the PNG is written to.
+    project_code : str
+        Project code, for the title and the file name.
+    label : str
+        File-name label (``raw``).
+    source_roles : dict, optional
+        ``{source: role}`` (``SourceType`` values); the role is added to the legend.
+    reason : str
+        Why this reference antenna and subband were chosen; written under the title.
+
+    Returns
+    -------
+    pathlib.Path
+        The PNG, named by :func:`time_evolution_filename` (not written when there is no baseline).
+    """
+    plot_dir = Path(plot_dir)
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    refant, subband = str(series["refant"]), int(series["subband"])
+    outfile = plot_dir / time_evolution_filename(project_code, refant, subband, label)
+    antennas = list(series.get("antennas") or [])
+    if not antennas:
+        logger.warning("no baselines to {} to plot for {}", refant, project_code)
+        return outfile
+    hands = list(series.get("polarizations") or ["P1"])
+    order = list(series.get("sources") or [])          # position = colour; unknown sources are appended
+    scan_sources = {int(number): str(source) for number, source in (series.get("scan_sources") or {}).items()}
+    notes = series.get("notes") or {}
+    all_times = [np.asarray(entry["times"], dtype=float) for entry in series["baselines"].values()
+                 if len(entry["times"])]
+    start, end = series.get("time_range") or ((min(t.min() for t in all_times), max(t.max() for t in all_times))
+                                              if all_times else (0.0, 1.0))
+    day_start = mdates.date2num(mjdsec2datetime(start))
+
+    with_data = [antenna for antenna in antennas if len((series["baselines"].get(antenna) or {}).get("times", []))]
+    heights = [1.0 if antenna in with_data else TIME_EVOLUTION_EMPTY_ROW for antenna in antennas]
+    figure = plt.figure(figsize=(max(10.0, TIME_EVOLUTION_PANEL_WIDTH * len(hands)),
+                                 TIME_EVOLUTION_ROW_HEIGHT * sum(heights) + 1.1), layout="constrained")
+    outer = figure.add_gridspec(len(antennas), len(hands), height_ratios=heights)
+    shared_axis = None
+    drawn: set[str] = set()
+    for row, antenna in enumerate(antennas):
+        if antenna not in with_data:
+            strip = figure.add_subplot(outer[row, :])
+            strip.set_axis_off()
+            # The strip has no axis labels, so it starts left of the panels: indent it to line up with them.
+            strip.text(0.03, 0.5, f"{refant}-{antenna}", transform=strip.transAxes, ha="left", va="center",
+                       fontsize=10, fontweight="bold")
+            strip.text(0.10, 0.5, notes.get(antenna, "no unflagged data"), transform=strip.transAxes, ha="left",
+                       va="center", fontsize=9, color="0.4", style="italic")
+            continue
+        entry = series["baselines"][antenna]
+        days = day_start + (np.asarray(entry["times"], dtype=float) - start) / 86400.0
+        vis = np.asarray(entry["vis"])
+        vis = vis[:, np.newaxis] if vis.ndim == 1 else vis
+        scans, sample_scan = np.unique(np.asarray(entry["scans"], dtype=int), return_inverse=True)
+        sample_source = np.asarray([scan_sources.get(int(number), "") for number in scans], dtype=object)[sample_scan]
+        amp_axes, amplitudes = [], []
+        for col, hand in enumerate(hands):
+            amp_axis, phase_axis = _stacked_pair(figure, outer[row, col], sharex=shared_axis)
+            shared_axis = shared_axis or amp_axis
+            column = vis[:, col] if col < vis.shape[1] else np.full(vis.shape[0], np.nan, dtype=complex)
+            finite = np.isfinite(column)
+            for source in dict.fromkeys(sample_source[finite]):
+                if source not in order:
+                    order.append(source)
+                samples = finite & (sample_source == source)
+                style = {"ls": "none", "marker": ".", "ms": 2.5, "mew": 0.0, "rasterized": True,
+                         "color": SOURCE_COLORS[order.index(source) % len(SOURCE_COLORS)]}
+                amp_axis.plot(days[samples], np.abs(column[samples]), **style)
+                phase_axis.plot(days[samples], np.degrees(np.angle(column[samples])), **style)
+                drawn.add(source)
+            if not finite.any():
+                amp_axis.text(0.5, 0.5, f"no unflagged {hand} data", transform=amp_axis.transAxes, ha="center",
+                              va="center", fontsize=9, color="0.4", style="italic")
+            _style_stacked_pair(amp_axis, phase_axis, fontsize=8)
+            amp_axis.set_title(f"{refant}-{antenna}  {hand}", fontsize=10, fontweight="bold", loc="left")
+            if antenna == with_data[-1]:
+                phase_axis.set_xlabel("UTC", fontsize=9)
+            else:
+                phase_axis.tick_params(labelbottom=False)
+            amp_axes.append(amp_axis)
+            amplitudes.append(np.abs(column[finite]))
+        # Both hands of a baseline on one scale: a weak or dead hand must look weak, not rescaled.
+        for amp_axis in amp_axes:
+            amp_axis.set_ylim(0.0, lightcurve_amplitude_limit(amplitudes))
+
+    if shared_axis is not None:
+        margin = 0.01 * (end - start) / 86400.0
+        shared_axis.set_xlim(day_start - margin, day_start + (end - start) / 86400.0 + margin)
+        locator = mdates.AutoDateLocator(minticks=4, maxticks=10)
+        shared_axis.xaxis.set_major_locator(locator)
+        shared_axis.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+
+    roles = source_roles or {}
+    handles = []
+    for index, source in enumerate(order):
+        if source in drawn:
+            role = SOURCE_ROLE_NAMES.get(str(roles.get(source, "")), "")
+            handles.append(Line2D([], [], ls="none", marker="o", ms=6, color=SOURCE_COLORS[index % len(SOURCE_COLORS)],
+                                  label=f"{source or 'unknown source'}{f' ({role})' if role else ''}"))
+    if handles:
+        figure.legend(handles=handles, loc="outside upper right", ncols=min(len(handles), 6), frameon=False,
+                      fontsize=9)
+    first, last = series.get("channels") or (0, 0)
+    kind = "raw data" if series.get("column", "data") == "data" else f"{series.get('column')} data"
+    title = (f"{project_code} — {kind} vs time on baselines to {refant}, subband {subband} "
+             f"({float(series.get('frequency_ghz') or 0.0):.4f} GHz; channels {first}-{last} of "
+             f"{series.get('n_channels', '?')} vector-averaged, {float(series.get('bandwidth_mhz') or 0.0):g} MHz)")
+    figure.suptitle(title + (f"\n{reason}" if reason else ""), x=0.01, ha="left", fontsize=11, fontweight="bold")
+    figure.savefig(outfile, dpi=dpi)
+    plt.close(figure)
+    logger.info("time-evolution plot written: {}", outfile)
+    return outfile
+
+
 def plot_radplot(uvdata: dict, plot_dir: Union[str, Path], project_code: str = "",
                  label: str = "", dpi: int = 150) -> Path:
     """Plot amplitude and phase against uv distance for one source (a "radplot").
@@ -373,12 +626,18 @@ def plot_radplot(uvdata: dict, plot_dir: Union[str, Path], project_code: str = "
     return outfile
 
 
-def plot_uv_coverage(data: dict, output: str, *, title: str = "", dpi: int = 150) -> str:
+def plot_uv_coverage(data: dict, output: str, *, title: str = "", dpi: int = 150,
+                     per_source: bool = True) -> str:
     """Plot the sampled uv plane (u vs v) for each source, one panel per field.
 
     Each panel shows the sampled points and their conjugates ``(-u, -v)`` with
     equal aspect; all panels share the same symmetric limits so the coverage of
     a weak target can be compared directly with that of its calibrators.
+
+    With ``per_source`` a single-panel copy is also written per field, named
+    ``<output stem>.<source>.png`` and drawn on those same shared limits, so a
+    report organised per source has a figure of its own for each one while the
+    combined figure stays available for the comparison.
 
     Parameters
     ----------
@@ -388,11 +647,15 @@ def plot_uv_coverage(data: dict, output: str, *, title: str = "", dpi: int = 150
         Path of the PNG to write.
     title : str
         Figure title (the unit and frequency are appended).
+    dpi : int
+        Figure resolution.
+    per_source : bool
+        Also write one single-panel PNG per source next to the combined figure.
 
     Returns
     -------
     str
-        The written PNG path (``output``).
+        The written PNG path (``output``); the per-source files sit beside it.
     """
     outfile = Path(output)
     outfile.parent.mkdir(parents=True, exist_ok=True)
@@ -406,11 +669,13 @@ def plot_uv_coverage(data: dict, output: str, *, title: str = "", dpi: int = 150
                              np.asarray(f.get("v", []), dtype=float)]).max(initial=0.0)
                  for f in fields.values()), default=0.0) * 1.05 or 1.0
 
-    nrows, ncols = subplot_grid(len(fields), max_cols=3)
-    figure, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 3.6 * nrows), squeeze=False,
-                                layout="constrained")
-    for axis, (name, points) in zip(axes.flat, fields.items()):
-        u, v = np.asarray(points.get("u", []), dtype=float), np.asarray(points.get("v", []), dtype=float)
+    freq = data.get("freq_ghz")
+    detail = f" at {freq:.2f} GHz" if freq else ""
+
+    def draw(axis, name: str, points: dict) -> None:
+        """Draw one source's sampled uv points and their conjugates on the shared limits."""
+        u = np.asarray(points.get("u", []), dtype=float)
+        v = np.asarray(points.get("v", []), dtype=float)
         axis.plot(np.r_[u, -u], np.r_[v, -v], ls="none", marker=".", ms=1.0, alpha=0.6,
                   color=SUBBAND_COLORS[0], rasterized=True)
         axis.set_xlim(limit, -limit)
@@ -419,19 +684,38 @@ def plot_uv_coverage(data: dict, output: str, *, title: str = "", dpi: int = 150
         axis.set_title(f"{name} ({u.size} pts)", fontsize=9)
         style_axis(axis)
         axis.tick_params(labelsize=7)
+
+    nrows, ncols = subplot_grid(len(fields), max_cols=3)
+    figure, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 3.6 * nrows), squeeze=False,
+                                layout="constrained")
+    for axis, (name, points) in zip(axes.flat, fields.items()):
+        draw(axis, name, points)
     for axis in axes.flat[len(fields):]:
         axis.set_visible(False)
     for axis in axes[-1, :]:
         axis.set_xlabel(f"u ({unit_label})", fontsize=9)
     for axis in axes[:, 0]:
         axis.set_ylabel(f"v ({unit_label})", fontsize=9)
-    freq = data.get("freq_ghz")
-    detail = f" at {freq:.2f} GHz" if freq else ""
     figure.suptitle(f"{title or 'uv coverage'}{detail}", x=0.01, ha="left", fontsize=11,
                     fontweight="bold")
     figure.savefig(outfile, dpi=dpi)
     plt.close(figure)
     logger.info("uv coverage plot written: {}", outfile)
+    if per_source:
+        for name, points in fields.items():
+            single, axis = plt.subplots(figsize=(4.2, 4.4), layout="constrained")
+            draw(axis, name, points)
+            axis.set_xlabel(f"u ({unit_label})", fontsize=9)
+            axis.set_ylabel(f"v ({unit_label})", fontsize=9)
+            single.suptitle(f"{title or 'uv coverage'}{detail}", x=0.01, ha="left", fontsize=11,
+                            fontweight="bold")
+            # Same name sanitising as the image grid (plot_image_grid), so the report
+            # attributes both to the same source.
+            safe = str(name).replace(",", "_").replace("/", "_")
+            path = outfile.with_name(f"{outfile.stem}.{safe}{outfile.suffix}")
+            single.savefig(path, dpi=dpi)
+            plt.close(single)
+            logger.info("uv coverage plot written: {}", path)
     return str(outfile)
 
 
@@ -1140,8 +1424,21 @@ class CalTablePlotter:
             table.close()
         return data
 
+    @staticmethod
+    def viscal(caltable: Union[str, Path]) -> str:
+        """Return the ``VisCal`` keyword of a calibration table (e.g. ``"EPowerCurve"``, ``"B TSYS"``)."""
+        import casatools
+        table = casatools.table()
+        if not table.open(str(caltable)):
+            raise ValueError(f"could not open calibration table {caltable}")
+        try:
+            return str(table.getkeyword("VisCal"))
+        finally:
+            table.close()
+
     # -- public API --
-    def plot(self, caltable: Union[str, Path], cal_type: str = "", outfile: Optional[str] = None) -> list[Path]:
+    def plot(self, caltable: Union[str, Path], cal_type: str = "", outfile: Optional[str] = None, *,
+             elevation_ranges: Optional[dict] = None, dpfu: Optional[dict] = None) -> list[Path]:
         """Plot a calibration table, dispatching on its VisCal kind.
 
         Parameters
@@ -1152,6 +1449,12 @@ class CalTablePlotter:
             Short type tag used in output names (falls back to the table stem).
         outfile : str, optional
             Explicit output PNG path (single-figure kinds only).
+        elevation_ranges : dict, optional
+            ``{antenna: (lowest, highest)}`` elevation in degrees each antenna observed at. Gain-curve
+            tables only; see :meth:`_plot_gain_curve`.
+        dpfu : dict, optional
+            ``{antenna: {subband: (dpfu_pol0, dpfu_pol1)}}`` station sensitivities in K/Jy. Gain-curve
+            tables only; see :meth:`_plot_gain_curve`.
 
         Returns
         -------
@@ -1164,8 +1467,8 @@ class CalTablePlotter:
         viscal = data["viscal"].upper()
         if "TSYS" in viscal:
             return [self._plot_tsys(data, base, stem)]
-        if "POWERCURVE" in viscal:
-            return [self._plot_gain_curve(data, base, stem)]
+        if is_gain_curve_table(viscal):
+            return [self._plot_gain_curve(data, base, stem, elevation_ranges=elevation_ranges, dpfu=dpfu)]
         if "FRINGE" in viscal:
             return self._plot_fringe(data, base, stem)
         return self._plot_gains(data, base, stem)
@@ -1233,28 +1536,92 @@ class CalTablePlotter:
         handles = self._pol_legend_handles(n_pol)
         return self._finish(fig, handles, f"{stem} — system temperature", outfile)
 
-    def _plot_gain_curve(self, data: dict, outfile: Path, stem: str) -> Path:
-        """Gain-curve polynomials vs elevation: one subplot per antenna, color per pol (R/L)."""
+    def _plot_gain_curve(self, data: dict, outfile: Path, stem: str, elevation_ranges: Optional[dict] = None,
+                         dpfu: Optional[dict] = None) -> Path:
+        """Normalised gain curves vs elevation: one subplot per antenna, color per polarization (R/L).
+
+        The table holds, per antenna, subband and polarization, the power gain ``DPFU x POLY`` in K/Jy
+        as a polynomial in zenith angle (see :func:`evaluate_gain_curve`); CASA applies its square root.
+        Each curve is drawn against the elevation and divided by the station's DPFU when ``dpfu`` has
+        it, otherwise by its own peak over the elevations observed (:func:`normalise_gain_curve`). The
+        y label and the right-hand panel title say which of the two, with the value per polarization.
+
+        The elevations the antenna observed at (``elevation_ranges``) are shaded and the curve is drawn
+        with a full line there; the rest is faint and does not set the y limits. A polynomial that was
+        refitted to the eight terms CASA can hold is only meaningful inside that range.
+
+        Parameters
+        ----------
+        data : dict
+            Table contents as returned by :meth:`_read`.
+        outfile : pathlib.Path
+            PNG to write.
+        stem : str
+            Table tag used in the figure title.
+        elevation_ranges : dict, optional
+            ``{antenna: (lowest, highest)}`` elevation in degrees each antenna observed at. An antenna
+            without an entry has its whole curve treated as observed.
+        dpfu : dict, optional
+            ``{antenna: {subband: (dpfu_pol0, dpfu_pol1)}}`` station sensitivities in K/Jy.
+
+        Returns
+        -------
+        pathlib.Path
+            The PNG written.
+        """
+        elevation_ranges, dpfu = elevation_ranges or {}, dpfu or {}
         n_par = data["param"].shape[2]
         n_pol = 2 if n_par % 2 == 0 else 1
         n_coeff = n_par // n_pol
-        elevation = np.linspace(1.0, 90.0, 90)
+        elevation = GAIN_CURVE_ELEVATIONS
         fig, axis_of = self._antenna_figure(data["antenna"], data["antenna_names"])
         for antenna_id, axis in axis_of.items():
+            name = data["antenna_names"][antenna_id] if antenna_id < len(data["antenna_names"]) else f"#{antenna_id}"
+            span = elevation_ranges.get(name)
+            inside = (elevation >= span[0]) & (elevation <= span[1]) if span else np.zeros(elevation.size, dtype=bool)
+            # Without a usable range the whole curve counts as observed.
+            observed = inside if inside.any() else np.ones(elevation.size, dtype=bool)
+            if inside.any():
+                axis.axvspan(span[0], span[1], color="0.5", alpha=0.1, lw=0)
+            in_view, references, kinds, drawn = [], {}, set(), set()
             for spw in np.unique(data["spw"]):
                 rows = np.where((data["antenna"] == antenna_id) & (data["spw"] == spw))[0]
                 if not len(rows):
                     continue
+                station = dpfu.get(name, {}).get(int(spw), ())
                 for pol in range(n_pol):
                     coeffs = data["param"][rows[0], 0, pol * n_coeff:(pol + 1) * n_coeff]
+                    station_dpfu = float(station[pol]) if pol < len(station) else None
+                    # Subbands nearly always share one curve: draw each distinct one once.
+                    key = (pol, np.asarray(coeffs).tobytes(), station_dpfu)
+                    if key in drawn:
+                        continue
+                    drawn.add(key)
+                    power = evaluate_gain_curve(coeffs, elevation, variable="za")
+                    curve, reference, kind = normalise_gain_curve(power, observed, station_dpfu)
+                    references.setdefault(pol, reference)
+                    kinds.add(kind)
+                    in_view.append(curve[observed])
+                    color = POL_COLORS[pol % len(POL_COLORS)]
+                    axis.plot(elevation, curve, color=color, lw=0.7, alpha=0.3)
                     # First pol drawn wider underneath: both stay visible when curves coincide.
-                    axis.plot(elevation, evaluate_gain_curve(coeffs, elevation), ls="none",
-                              marker=".", ms=3.0 if pol == 0 else 1.5,
-                              color=POL_COLORS[pol % len(POL_COLORS)])
+                    axis.plot(elevation[observed], curve[observed], color=color, lw=2.6 if pol == 0 else 1.2)
+            axis.axhline(1.0, color="0.35", lw=0.6, ls=":")
+            if in_view:
+                axis.set_ylim(*gain_curve_ylim(np.concatenate(in_view)))
+            kind = kinds.pop() if len(kinds) == 1 else "reference"
+            quoted = "  ".join(f"{POL_LABELS[p % len(POL_LABELS)]} {references[p]:.4g}" for p in sorted(references))
+            # "unit": neither a DPFU nor a positive peak, so the curve is shown as stored.
+            axis.set_title("not normalised" if kind == "unit" else f"{kind} {quoted} K/Jy", fontsize=7, loc="right")
+            axis.set_xlim(0.0, 90.0)
+            axis.set_xticks(np.arange(0, 91, 15))
             # No label_outer(): panels do not share the y scale, ticks must stay visible.
-            axis.set_ylabel("gain", fontsize=8)
+            axis.set_ylabel("gain (K/Jy)" if kind == "unit" else f"gain / {kind}", fontsize=8)
+        handles = self._pol_legend_handles(n_pol)
+        if elevation_ranges:
+            handles.append(Line2D([], [], color="0.5", alpha=0.3, lw=6, label="elevations observed"))
         fig.supxlabel("elevation (deg)", fontsize=9)
-        return self._finish(fig, self._pol_legend_handles(n_pol), f"{stem} — gain curve", outfile)
+        return self._finish(fig, handles, f"{stem} — gain curve", outfile)
 
     def _plot_fringe(self, data: dict, outfile: Path, stem: str) -> list[Path]:
         """Fringe solutions in phase, delay, rate order.

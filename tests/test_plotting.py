@@ -18,14 +18,131 @@ def test_subplot_grid_shapes():
     assert subplot_grid(14) == (4, 4)
 
 
-def test_evaluate_gain_curve_polynomial():
-    # g(el) = 0.5 + 0.01*el - 0.0001*el^2
-    coeffs = [0.5, 0.01, -1e-4]
-    el = np.array([0.0, 10.0, 50.0])
-    expected = 0.5 + 0.01 * el - 1e-4 * el**2
-    assert np.allclose(evaluate_gain_curve(coeffs, el), expected)
-    # trailing zero-padded coefficients (from the zero-padded GAIN storage) are harmless
-    assert np.allclose(evaluate_gain_curve([0.5, 0.01, -1e-4, 0.0, 0.0], el), expected)
+#: Medicina in EM163. The station's ANTAB entry is ``GAIN MC ELEV DPFU = 0.16, 0.16 POLY = ...`` (a
+#: polynomial in elevation); MC_CALTABLE is what ``gencal(caltype='gc')`` wrote for it in the EPowerCurve
+#: table: DPFU x POLY re-expanded in zenith angle, zero-padded to eight coefficients.
+MC_DPFU = 0.16
+MC_ANTAB_POLY = [0.79212981, 0.0062403816, -4.6834953e-05]
+MC_CALTABLE = [1.559041440e-01, 3.503856715e-04, -7.493592420e-06, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+
+def test_evaluate_gain_curve_says_what_the_polynomial_is_a_function_of():
+    """The second argument is always the elevation; ``variable`` names the polynomial's own variable."""
+    el = np.array([30.0, 50.0, 70.0])
+    antab = MC_DPFU * evaluate_gain_curve(MC_ANTAB_POLY, el, variable="el")
+    assert np.allclose(antab, MC_DPFU * (0.79212981 + 0.0062403816 * el - 4.6834953e-05 * el**2))
+    # the caltable holds the same curve as a polynomial in zenith angle = 90 - elevation
+    assert np.allclose(evaluate_gain_curve(MC_CALTABLE, el, variable="za"), antab, rtol=1e-6)
+    # read as a polynomial in elevation it is mirrored: 6% high at 30 deg and 10% low at 70 deg
+    mirrored = evaluate_gain_curve(MC_CALTABLE, el, variable="el") / antab
+    assert mirrored[0] == pytest.approx(1.065, abs=2e-3) and mirrored[2] == pytest.approx(0.899, abs=2e-3)
+    # trailing zero-padded coefficients (the table always stores eight per polarization) are harmless
+    assert np.allclose(evaluate_gain_curve(MC_CALTABLE[:3], el, variable="za"), antab, rtol=1e-6)
+    with pytest.raises(ValueError, match="'za' or 'el'"):
+        evaluate_gain_curve(MC_CALTABLE, el, variable="elevation")
+    with pytest.raises(TypeError):
+        evaluate_gain_curve(MC_CALTABLE, el)        # the variable has to be named: there is no safe default
+
+
+def test_normalise_gain_curve_prefers_the_dpfu_and_falls_back_to_the_observed_peak():
+    from vlbipy.plotting import normalise_gain_curve
+    el = np.linspace(0.0, 90.0, 181)
+    power = evaluate_gain_curve(MC_CALTABLE, el, variable="za")
+    curve, reference, kind = normalise_gain_curve(power, np.ones(el.size, dtype=bool), MC_DPFU)
+    assert (reference, kind) == (MC_DPFU, "DPFU")
+    # divided by the DPFU the table gives back the station's own POLY(el): 1.0 at 66.6 deg
+    assert np.allclose(curve, evaluate_gain_curve(MC_ANTAB_POLY, el, variable="el"), rtol=1e-6)
+    assert curve.max() == pytest.approx(1.0, abs=1e-4) and el[np.argmax(curve)] == pytest.approx(66.5, abs=0.5)
+    # no DPFU on record: the peak over the observed elevations (here the antenna never got above 40 deg)
+    low = el <= 40.0
+    curve, reference, kind = normalise_gain_curve(power, low)
+    assert kind == "peak" and reference == pytest.approx(power[low].max())
+    assert curve[low].max() == pytest.approx(1.0) and curve.max() > 1.0
+    # nothing positive to scale by: the curve is left as stored
+    assert normalise_gain_curve(np.zeros(5), np.ones(5, dtype=bool))[1:] == (1.0, "unit")
+
+
+def test_gain_curve_ylim_keeps_unity_in_view_and_never_collapses():
+    from vlbipy.plotting import gain_curve_ylim
+    assert gain_curve_ylim(np.ones(10)) == pytest.approx((0.975, 1.025))
+    assert gain_curve_ylim(np.array([])) == pytest.approx((0.975, 1.025))
+    low, high = gain_curve_ylim(np.array([0.8, 0.9, np.nan]))
+    assert low == pytest.approx(0.775) and high == pytest.approx(1.025)
+
+
+def _za_coefficients(elevation_poly, dpfu, n_coeff=8):
+    """What gencal stores for an elevation polynomial: DPFU x POLY re-expanded in zenith angle, zero-padded."""
+    from numpy.polynomial import Polynomial
+    za = Polynomial(elevation_poly)(Polynomial([90.0, -1.0])).coef * dpfu
+    return np.r_[za, np.zeros(n_coeff - za.size)]
+
+
+def _gain_curve_data(curves, n_spw=2):
+    """In-memory EPowerCurve table. ``curves``: {antenna: (first pol, second pol)} coefficients in zenith angle."""
+    names = list(curves)
+    param = np.array([np.r_[curves[name][0], curves[name][1]] for name in names for _ in range(n_spw)])[:, None, :]
+    return {"viscal": "EPowerCurve", "time": np.full(param.shape[0], 5e9),
+            "antenna": np.repeat(np.arange(len(names)), n_spw), "spw": np.tile(np.arange(n_spw), len(names)),
+            "flag": np.zeros(param.shape, dtype=bool), "param": param, "antenna_names": names}
+
+
+def _capture_panels(monkeypatch):
+    """Record, per antenna panel, what the next gain-curve figure shows (read when the figure is closed)."""
+    import matplotlib.pyplot as plt
+    panels = {}
+    monkeypatch.setattr(plt, "close", lambda figure: panels.update({
+        axis.get_title(loc="left"): {"right": axis.get_title(loc="right"), "ylabel": axis.get_ylabel(),
+                                     "ylim": axis.get_ylim(), "xlabel": figure.get_supxlabel(),
+                                     "curve": axis.get_lines()[0].get_xydata()}
+        for axis in figure.axes if axis.get_visible()}))
+    return panels
+
+
+def test_gain_curve_plot_is_normalised_and_drawn_against_elevation(tmp_path, monkeypatch):
+    """Curves sit near 1 with their peak at the right elevation; a refit running away does not set the limits."""
+    from vlbipy.plotting import CalTablePlotter
+    mc = _za_coefficients(MC_ANTAB_POLY, MC_DPFU)
+    assert np.allclose(mc, MC_CALTABLE, rtol=1e-6)                      # the helper reproduces the real table
+    # like a refitted polynomial: fine where the antenna observed (below 65 deg), 50% too high at the zenith
+    wild = _za_coefficients([1.0, 0, 0, 0, 0, 0, 0, 1.02e-14], 0.12)
+    data = _gain_curve_data({"MC": (mc, mc), "WB": (_za_coefficients([1.0], 0.084134), _za_coefficients([1.0], 0.0854)),
+                             "JB": (wild, wild)})
+    panels = _capture_panels(monkeypatch)
+    dpfu = {"MC": {0: (0.16, 0.16), 1: (0.16, 0.16)}, "WB": {0: (0.084134, 0.0854), 1: (0.084134, 0.0854)},
+            "JB": {0: (0.12, 0.12), 1: (0.12, 0.12)}}
+    out = CalTablePlotter(tmp_path)._plot_gain_curve(data, tmp_path / "x.gcal.png", "gc", dpfu=dpfu,
+                                                     elevation_ranges={"MC": (9.4, 76.9), "JB": (4.8, 64.3)})
+    assert out.stat().st_size > 1000
+    assert panels["MC"]["xlabel"] == "elevation (deg)" and panels["MC"]["ylabel"] == "gain / DPFU"
+    assert panels["MC"]["right"] == "DPFU R 0.16  L 0.16 K/Jy"
+    elevation, gain = panels["MC"]["curve"].T
+    assert gain.max() == pytest.approx(1.0, abs=1e-4) and elevation[np.argmax(gain)] == pytest.approx(66.5, abs=0.5)
+    assert gain[elevation == 30.0][0] == pytest.approx(0.79212981 + 0.0062403816 * 30 - 4.6834953e-05 * 900, rel=1e-6)
+    # each polarization is divided by its own DPFU: a constant curve is exactly 1 in both
+    assert panels["WB"]["right"] == "DPFU R 0.08413  L 0.0854 K/Jy"
+    assert np.allclose(panels["WB"]["curve"][:, 1], 1.0) and panels["WB"]["ylim"] == pytest.approx((0.975, 1.025))
+    # the runaway above the observed range is drawn but does not flatten the panel
+    assert panels["JB"]["curve"][:, 1].max() > 1.4 and panels["JB"]["ylim"][1] < 1.1
+
+
+def test_gain_curve_plot_without_dpfu_or_ranges_divides_by_the_peak(tmp_path, monkeypatch):
+    """A table with no DPFU record is still plotted, labelled as divided by its peak (over the observed range)."""
+    from vlbipy.plotting import CalTablePlotter
+    mc = _za_coefficients(MC_ANTAB_POLY, MC_DPFU)
+    wb = (_za_coefficients([1.0], 0.084134), _za_coefficients([1.0], 0.0854))
+    data = _gain_curve_data({"MC": (mc, mc), "WB": wb})
+    panels = _capture_panels(monkeypatch)
+    plotter = CalTablePlotter(tmp_path)
+    plotter._plot_gain_curve(data, tmp_path / "a.gcal.png", "gc", elevation_ranges={"MC": (9.4, 40.0)})
+    # MC never got above 40 deg: its highest gain there is 0.16 x POLY(40 deg) = 0.1547 K/Jy
+    assert panels["MC"]["right"] == "peak R 0.1547  L 0.1547 K/Jy" and panels["MC"]["ylabel"] == "gain / peak"
+    elevation, gain = panels["MC"]["curve"].T
+    assert gain[elevation <= 40.0].max() == pytest.approx(1.0) and gain.max() == pytest.approx(1.0 / 0.96681, rel=1e-4)
+    panels.clear()
+    out = plotter._plot_gain_curve(data, tmp_path / "b.gcal.png", "gc")
+    assert out.stat().st_size > 1000
+    assert panels["MC"]["right"] == "peak R 0.16  L 0.16 K/Jy"
+    assert panels["WB"]["right"] == "peak R 0.08413  L 0.0854 K/Jy"
 
 
 def test_subband_colors_fixed_order():
@@ -48,6 +165,18 @@ def test_plot_namespace_caltable_single_dummy():
     tables = obs.calibrate.a_priori()
     paths = obs.plot.caltable(tables[0])
     assert isinstance(paths, list) and len(paths) == 1
+
+
+def test_plot_caltables_from_disk_skips_what_is_not_a_calibration_table(tmp_path):
+    """With no chain in memory the tables on disk are plotted - not the other things kept in ``caltables/``."""
+    obs = VLBIObs("pl03", network="EVN", backend="dummy", target="SRC", work_dir=str(tmp_path))
+    caldir = tmp_path / "caltables"
+    for name, kind in (("pl03.gcal", "Calibration"), ("pl03.tsys", "Calibration"), ("pl03.gain_curve.original", "")):
+        (caldir / name).mkdir(parents=True)
+        (caldir / name / "table.info").write_text(f"Type = {kind}\nSubType = \n")
+    (caldir / "pl03.gcal.dpfu.json").write_text("{}")        # the DPFU record kept beside the gain-curve table
+    (caldir / "empty_directory").mkdir()
+    assert sorted(Path(p).name for p in obs.plot.caltables()) == ["pl03.gcal.png", "pl03.tsys.png"]
 
 
 # -- scan x antenna SNR matrix --
@@ -134,9 +263,20 @@ def test_plot_uv_coverage_writes_png(tmp_path):
     out = plot_uv_coverage(data, str(tmp_path / "uvc.uv_coverage.png"), title="uvc — uv coverage")
     assert out.endswith("uvc.uv_coverage.png")
     assert (tmp_path / "uvc.uv_coverage.png").stat().st_size > 1000
+    # A single-panel copy per source as well, so the per-source report has one each.
+    assert {p.name for p in tmp_path.glob("uvc.uv_coverage.*.png")} == {
+        "uvc.uv_coverage.3C345.png", "uvc.uv_coverage.J1848+3219.png"}
     # nothing to plot -> no file, but the path is still returned
     empty = plot_uv_coverage({"fields": {}}, str(tmp_path / "none.png"))
     assert empty.endswith("none.png") and not (tmp_path / "none.png").exists()
+
+
+def test_plot_uv_coverage_can_skip_the_per_source_copies(tmp_path):
+    from vlbipy.plotting import plot_uv_coverage
+
+    data = {"fields": {"A": {"u": [1.0, 2.0], "v": [1.0, -2.0]}}, "unit": "Mlambda"}
+    plot_uv_coverage(data, str(tmp_path / "p.uv_coverage.png"), per_source=False)
+    assert [p.name for p in tmp_path.glob("*.png")] == ["p.uv_coverage.png"]
 
 
 # -- stacked amplitude/phase pairs --

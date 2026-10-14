@@ -60,3 +60,29 @@ def test_write_summary_creates_the_file(tmp_path):
     out = write_summary(_metadata(), tmp_path / "sub" / "summary.md")
     assert out.exists()
     assert out.read_text().startswith("VLBI Observation Summary: TEST")
+
+
+def test_summary_written_at_import_leaves_a_placeholder_for_the_general_comments():
+    """The import step has nothing to comment on yet: the first section says when it gets filled in."""
+    lines = full_summary(_metadata()).splitlines()
+    assert lines[0] == "VLBI Observation Summary: TEST" and lines[3] == ""
+    assert lines[4] == "General Comments for TEST" and lines[5] == "=" * 100
+    assert "filled in once the pipeline has run" in lines[6]
+    assert lines.index("General Comments for TEST") < lines.index("Source Summary for TEST")
+
+
+def test_general_comments_are_the_first_section_of_the_summary(tmp_path):
+    comments = [{"severity": "note", "category": "calibration", "antenna": "",
+                 "text": "Scan 1 (3C345) was selected for the instrumental delay (reference antenna EF)."},
+                {"severity": "warning", "category": "antenna", "antenna": "HH", "text": "no data in scan 2"},
+                {"severity": "note", "category": "antenna", "antenna": "", "text": "Nothing to report for: EF, WB."}]
+    out = write_summary(_metadata(), tmp_path / "summary.md", comments=comments)
+    lines = out.read_text().splitlines()
+    block = lines[lines.index("General Comments for TEST"):lines.index("Source Summary for TEST")]
+    assert block[2] == "Calibration and results"
+    assert block[3] == "  note     Scan 1 (3C345) was selected for the instrumental delay (reference antenna EF)."
+    assert block[4:7] == ["Antennas", "  HH  WARNING  no data in scan 2", "  Nothing to report for: EF, WB."]
+    assert "filled in once the pipeline has run" not in "\n".join(block)
+    # The tables of the import step are all still there, after the comments.
+    for heading in ("Source Summary", "Frequency Setup", "Antenna Summary", "Scan Summary"):
+        assert any(line.startswith(heading) for line in lines[lines.index("Source Summary for TEST"):])

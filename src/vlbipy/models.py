@@ -18,6 +18,23 @@ from typing import Optional
 _C_M_S = 299792458.0
 
 
+def _median(values, default: float = float("nan")) -> float:
+    """Return the median of ``values``, or ``default`` when there is nothing to take it of.
+
+    Parameters
+    ----------
+    values : iterable of float
+        Values to reduce; must already be finite (``nan`` is not filtered here).
+    default : float
+        Returned for an empty input.
+    """
+    ordered = sorted(values)
+    if not ordered:
+        return default
+    mid = len(ordered) // 2
+    return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
 class Stokes(IntEnum):
     """Stokes / correlation types following the casacore (MS) convention."""
 
@@ -411,12 +428,8 @@ class ScanSNRSurvey:
     def median_snr(self, *, antenna: Optional[str] = None, scan_number: Optional[int] = None,
                    polarization: Optional[str] = None) -> float:
         """Return the median finite SNR over a selection (``nan`` if nothing matched)."""
-        values = sorted(self.values_for(antenna=antenna, scan_number=scan_number,
-                                        polarization=polarization))
-        if not values:
-            return float("nan")
-        mid = len(values) // 2
-        return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2.0
+        return _median(self.values_for(antenna=antenna, scan_number=scan_number,
+                                       polarization=polarization))
 
     def rank_scans(self) -> list[tuple[int, float]]:
         """Return ``(scan_number, median_snr)`` pairs, best scan first.
@@ -441,6 +454,75 @@ class ScanSNRSurvey:
             ranked.append((ant, max(per_hand) if per_hand else float("nan")))
         return sorted([r for r in ranked if r[1] == r[1]], key=lambda r: r[1], reverse=True)
 
+    def rank_sources(self) -> list[tuple[str, float, int]]:
+        """Return ``(source, array SNR, antennas detected)`` per surveyed source, best first.
+
+        The array SNR of a source is the median, over every surveyed antenna
+        except the reference one(s), of that antenna's *best* fringe SNR on the
+        source — counting an antenna the source never detected as zero. A source
+        only a few baselines see therefore ranks below one the whole array sees,
+        however bright those baselines are: the instrumental delay has to be
+        solved for the array, not for its best pair.
+
+        This is what decides which source the instrumental calibration is solved
+        on, and which source is the brightest calibrator when the configuration
+        declares no roles. "Detected" is not the same as "solvable": the
+        instrumental fringe fit needs real signal-to-noise, so a weak source
+        where every antenna sits just above the detection threshold must not win
+        over a bright one that is a hundred times stronger.
+
+        Returns
+        -------
+        list of tuple
+            ``[(source, array_snr, n_detected), ...]`` ordered by decreasing
+            array SNR (then by antennas detected). Empty when nothing was surveyed.
+        """
+        reference = set(self.refant_names)
+        columns = [index for index, name in enumerate(self.antennas) if name not in reference]
+        ranked = []
+        for source in dict.fromkeys(self.scan_sources):
+            rows = [row for row, name in enumerate(self.scan_sources) if name == source]
+            best = []
+            for column in columns:
+                values = [self.snr[pol][row][column] for pol in self.polarizations for row in rows]
+                values = [value for value in values if value == value]
+                best.append(max(values) if values else 0.0)
+            detected = sum(1 for value in best if value > 0.0)
+            ranked.append((source, _median(best, default=0.0), detected))
+        return sorted(ranked, key=lambda entry: (entry[1], entry[2]), reverse=True)
+
+    def source_of_scan(self) -> dict[int, str]:
+        """Return ``{scan_number: source}`` for the surveyed scans."""
+        return {int(scan): source for scan, source in zip(self.scan_numbers, self.scan_sources)}
+
+    def restricted_to(self, sources) -> "ScanSNRSurvey":
+        """Return a copy holding only the scans on ``sources``.
+
+        A survey over every source already contains the rows a survey of one
+        group would produce, so the per-group selection can be made from it
+        without repeating the fringe fit — which is the expensive part of
+        inspection. The antennas, polarizations and reference antenna are
+        unchanged, so the copy ranks and plans exactly like a survey solved on
+        that group alone.
+
+        Parameters
+        ----------
+        sources : iterable of str
+            Source names to keep.
+
+        Returns
+        -------
+        ScanSNRSurvey
+            A new survey with the matching rows (empty when none match).
+        """
+        from dataclasses import replace
+
+        wanted = set(sources)
+        rows = [row for row, source in enumerate(self.scan_sources) if source in wanted]
+        return replace(self, scan_numbers=[self.scan_numbers[r] for r in rows],
+                       scan_sources=[self.scan_sources[r] for r in rows],
+                       snr={pol: [matrix[r] for r in rows] for pol, matrix in self.snr.items()})
+
     @property
     def refant_names(self) -> list[str]:
         """Reference antenna(s) used, as a list (the solve may fall back between scans)."""
@@ -452,12 +534,8 @@ class ScanSNRSurvey:
         for row, scan in enumerate(self.scan_numbers):
             per_antenna: dict[str, Optional[float]] = {}
             for col, antenna in enumerate(self.antennas):
-                values = sorted(v for v in (self.snr[p][row][col] for p in self.polarizations) if v == v)
-                if not values:
-                    per_antenna[antenna] = None
-                    continue
-                mid = len(values) // 2
-                per_antenna[antenna] = values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2.0
+                values = [v for v in (self.snr[p][row][col] for p in self.polarizations) if v == v]
+                per_antenna[antenna] = _median(values) if values else None
             result[int(scan)] = per_antenna
         return result
 

@@ -392,7 +392,7 @@ class CalibrateNamespace(Namespace):
         tuple
             ``(antenna names best-first, scan numbers)``.
         """
-        from ..selection import plan_sbd_stages, select_antennas
+        from ..selection import plan_sbd_stages, select_antennas, without_weak_detections
 
         obs = self._obs
         # Decide the antenna/scan set once — on the first (cleanest) pass — and reuse it for
@@ -404,12 +404,17 @@ class CalibrateNamespace(Namespace):
         # dirtier data.
         if obs.cal_selection is not None:
             antennas, scans = obs.cal_selection
+            # The one thing that reopens it: an antenna whose own stage scan has been flagged away.
+            replanned = self._replan_lost_antennas(antennas, scans)
+            if replanned is not None:
+                return replanned
             logger.info("select_calibration_data: reusing the instrumental selection fixed on the "
                         "first pass — {} antenna(s) {} on scan(s) {} (not re-surveying the now-flagged "
                         "data)", len(antennas), ",".join(antennas), scans)
             return antennas, scans
         cal_cfg = obs.config.get("calibration", {})
         threshold = min_snr if min_snr is not None else cal_cfg.get("detection_snr", 7.0)
+        self.infer_source_roles()
         # Survey one source group at a time, in the order the calibration falls back
         # through them. The fringe finder is both the right source to solve on and
         # usually the one with fewest scans, so this avoids fringe-fitting every
@@ -425,7 +430,10 @@ class CalibrateNamespace(Namespace):
                 logger.info("select_calibration_data: no antenna qualifies on {}; trying the "
                             "next source group", ",".join(names))
                 continue
-            stages = plan_sbd_stages(survey, antennas, min_snr=threshold, sources=names, metadata=obs.metadata)
+            # Detected is not the same as on source: do not solve an antenna on a scan where it
+            # sits far below its own level in the other scans.
+            planning, _ = without_weak_detections(survey, self._weak_in_scans(names, survey), min_snr=threshold)
+            stages = plan_sbd_stages(planning, antennas, min_snr=threshold, sources=names, metadata=obs.metadata)
             scans = [stage["scan"] for stage in stages]
             if scans:
                 obs.set_cal_selection(antennas, scans, stages)
@@ -441,6 +449,256 @@ class CalibrateNamespace(Namespace):
                         f"{self._code}: no scan on {', '.join(attempted)} detects an antenna above "
                         f"{threshold:g} sigma ({detected}); the usable band is {band}. Lower "
                         f"calibration.detection_snr or check the flagging; cannot solve the instrumental delay")
+
+    def _weak_in_scans(self, names: list[str], survey) -> dict[int, list[str]]:
+        """Scans of the survey in which an antenna is far below its own level in the other scans.
+
+        The survey's fringe SNR cannot tell: an antenna in a sidelobe of a bright
+        fringe finder is still detected, at nearly the same SNR (EM163 scan 103: CM
+        at 6% of its amplitude, SNR 105/170 against 147/252 and 187/224 in its good
+        scans). The raw amplitudes can. They are read per source for the surveyed
+        scans (:meth:`read_baseline_timeline` with ``delay_search``, since nothing is
+        fringe-fitted yet) and compared between scans of the same baseline
+        (:func:`vlbipy.statistics.weak_scans_per_antenna`).
+        ``[calibration].weak_scan_level`` (default 0.3; 0 disables) is the fraction of
+        its best scan below which an antenna is not solved on a scan.
+
+        Returns
+        -------
+        dict
+            ``{scan: [antennas]}``; empty when the backend cannot read the data this
+            way, when it is disabled, or when no source has two surveyed scans.
+        """
+        from ..statistics import weak_scans_per_antenna
+
+        obs = self._obs
+        level = float(obs.config.get("calibration", {}).get("weak_scan_level", 0.3))
+        if level <= 0 or not self._backend.supports("data", "read_baseline_timeline"):
+            return {}
+        weak: dict[int, list[str]] = {}
+        for field in names:
+            scans = [scan for scan, source in zip(survey.scan_numbers, survey.scan_sources) if source == field]
+            if len(scans) < 2:
+                continue
+            try:
+                data = self._backend.data.read_baseline_timeline(self._code, field=field, column="data",
+                                                                 delay_search=True, scans=scans, metadata=obs.metadata)
+            except BackendError as exc:
+                logger.info("scan selection: could not compare the amplitudes of {} between scans ({})", field, exc)
+                continue
+            found = weak_scans_per_antenna(data["amplitude"], data["scans"], level=level)
+            for index, name in enumerate(data["antennas"]):
+                for position in found["weak"][index].nonzero()[0]:
+                    scan = int(found["scans"][position])
+                    weak.setdefault(scan, []).append(name)
+                    logger.info("scan selection: {} is at {:.0%} of its own best scan in scan {} of {}; not on "
+                                "source there, whatever its fringe SNR", name, found["gains"][index][position],
+                                scan, field)
+        return weak
+
+    def _replan_lost_antennas(self, antennas: list[str], scans: list[int], *,
+                              limit: float = 0.95) -> Optional[tuple[list[str], list[int]]]:
+        """Re-plan the instrumental stages when flagging has emptied an antenna's stage scan.
+
+        The selection is fixed on the first pass and deliberately not re-surveyed
+        afterwards. That leaves one hole: an antenna whose data in the scan it is
+        solved on gets flagged later. EM163: CM was detected in the chosen
+        fringe-finder scan, but at 6% of its amplitude (off source for the whole
+        scan; the fringe SNR barely shows it), and the off-source flagging rightly
+        removed it there. With the plan unchanged it then has no single-band delay
+        or bandpass, and applycal flags *all* its data. Such an antenna is given
+        another scan (:func:`vlbipy.selection.amend_sbd_stages`); the others keep
+        theirs, and the antenna set does not change.
+
+        Parameters
+        ----------
+        antennas, scans
+            The selection in use.
+        limit : float
+            An antenna counts as lost in a scan when at least this fraction of the
+            data it recorded there is flagged.
+
+        Returns
+        -------
+        tuple or None
+            The new ``(antennas, scans)``, also persisted; None when no antenna lost
+            its scan (or the backend cannot count flags per scan).
+        """
+        from ..selection import amend_sbd_stages, plan_sbd_stages, without_weak_detections
+
+        obs = self._obs
+        stages = obs.cal_stages
+        if not stages or [stage["scan"] for stage in stages] != list(scans):
+            return None
+        if not self._backend.supports("flag", "summary"):
+            return None
+        lost: dict[int, list[str]] = {}
+        for stage in stages:
+            scan = int(stage["scan"])
+            try:
+                counts = self._backend.flag.summary(self._code, where=f"SCAN_NUMBER == {scan}").get("antenna", {})
+            except BackendError as exc:
+                logger.warning("select_calibration_data: could not count the flags of scan {} ({}); keeping the "
+                               "selection as it is", scan, exc)
+                return None
+            for name in dict.fromkeys([*stage["antennas"], stage["refant"]]):
+                entry = counts.get(name)
+                if entry and entry["observable"] and entry["fraction"] >= limit and name not in lost.get(scan, []):
+                    lost.setdefault(scan, []).append(name)
+        if not lost:
+            return None
+        described = "; ".join(f"{', '.join(names)} in scan {scan}" for scan, names in sorted(lost.items()))
+        source_of = {scan.scan_number: scan.source for scan in obs.metadata.scans} if obs.metadata else {}
+        used = {source_of.get(int(scan)) for scan in scans}
+        names = next((group for group in self._calibration_source_groups() if used & set(group)), [])
+        if not names:
+            warnings.anomaly(f"{self._code}: flagging left no data for {described}, and the sources of the "
+                             "instrumental selection are unknown; those antennas will have no instrumental solution")
+            return None
+        threshold = obs.config.get("calibration", {}).get("detection_snr", 7.0)
+        logger.info("select_calibration_data: flagging left no data for {}; looking for another scan on {}",
+                    described, ",".join(names))
+        survey = self.scan_snr(field=",".join(names), force=True)
+        survey, _ = without_weak_detections(survey, self._weak_in_scans(names, survey), min_snr=threshold)
+        amended = amend_sbd_stages(stages, survey, lost, min_snr=threshold, sources=names, metadata=obs.metadata)
+        if not amended:
+            # A stage lost its own reference antenna, so nothing of the chain can be kept.
+            amended = plan_sbd_stages(survey, antennas, min_snr=threshold, sources=names, metadata=obs.metadata)
+        if not amended:
+            warnings.anomaly(f"{self._code}: flagging left no data for {described} and no scan on "
+                             f"{', '.join(names)} can replace it; keeping the selection as it is")
+            return None
+        new_scans = [stage["scan"] for stage in amended]
+        unsolved = sorted(set(antennas) - {name for stage in amended for name in stage["antennas"]})
+        if unsolved:
+            warnings.anomaly(f"{self._code}: {', '.join(unsolved)} lost the scan of the instrumental calibration "
+                             "to flagging and no other scan detects them; all their data will be flagged on apply")
+        obs.set_cal_selection(antennas, new_scans, amended)
+        logger.info("select_calibration_data: instrumental selection re-planned for the antennas that lost "
+                    "their scan — {} antenna(s) on scan(s) {}", len(antennas), new_scans)
+        return antennas, new_scans
+
+    def infer_source_roles(self, *, force: bool = False) -> dict:
+        """Give the sources in the data a role when the configuration declares none for them.
+
+        Without a role every field selection falls back to "all sources", and the
+        instrumental delay is then solved on whichever scan happens to cover the
+        most antennas — possibly a weak target, in which case the fringe fit
+        returns nothing above its minimum SNR. The roles are reconstructed from
+        the data: the scan pattern and sky positions say which sources form a
+        phase-referencing cycle, and a fringe SNR survey over *every* source says
+        how well the array detects each one
+        (:func:`~vlbipy.sources.infer_source_roles`).
+
+        Nothing happens when every observed source already has a declared role;
+        a declared role is never overridden. The survey this runs is the one the
+        instrumental selection then reuses, so the extra fringe fit is not
+        repeated per source group.
+
+        Parameters
+        ----------
+        force : bool
+            Re-infer even for sources that already have a role (the declared ones
+            still win; this only re-runs the survey and the inference).
+
+        Returns
+        -------
+        dict
+            ``{source: SourceType}`` actually adopted (empty when nothing was missing).
+        """
+        from ..sources import infer_source_roles as infer
+
+        obs = self._obs
+        if obs.metadata is None:
+            return {}
+        observed = [name for name in (obs.metadata.source_names or []) if name]
+        missing = [name for name in observed if name not in obs.sources]
+        if not missing and not force:
+            return {}
+        # Inferring the roles costs a fringe fit per surveyed scan, so an earlier run's answer
+        # is reused: the roles are a property of the observation, not of a pass. --scratch
+        # and force discard it.
+        if not force:
+            stored, stored_phaseref = obs.load_source_roles()
+            reusable = {name: role for name, role in stored.items() if name in missing}
+            if reusable and not set(missing) - set(reusable):
+                logger.info("source roles: reusing the roles inferred on an earlier run ({})",
+                            ", ".join(f"{n} = {r.value}" for n, r in reusable.items()))
+                obs.adopt_source_roles(reusable, stored_phaseref, persist=False)
+                return reusable
+        logger.info("source roles: {} of {} observed source(s) have no declared role ({}); inferring "
+                    "them from the data", len(missing), len(observed), ", ".join(missing) or "none")
+        survey = None
+        try:
+            survey = self.scan_snr(field=",".join(observed), scans=self._fair_scan_sample(observed),
+                                   max_scans=0)
+        except Exception as exc:  # noqa: BLE001 - the structural inference works without a survey
+            warnings.warn(f"{self._code}: could not survey every source to rank them by SNR ({exc}); "
+                          "inferring the source roles from the scan pattern alone")
+        declared = {s.name: s.source_type for s in obs.sources}
+        roles, phaseref = infer(obs.metadata, survey, declared=declared)
+        obs.adopt_source_roles(roles, phaseref)
+        return roles
+
+    def _field_for_scans(self, scans: Optional[list]) -> str:
+        """Return the field selection matching the scans the instrumental solve runs on.
+
+        The field and the scan selection are combined by the solver, so they have
+        to agree: solving ``field=<fringe finder>`` on a scan the selection took
+        from the phase calibrator (because the fringe finder detected nothing)
+        selects no data at all, and a staged solve may legitimately take its
+        stages from different sources. The sources of the chosen scans are
+        therefore what the field is built from, falling back to
+        :attr:`~vlbipy.observation.Observation.calibrator_field` when no scan is known.
+
+        Parameters
+        ----------
+        scans : list or None
+            Scan numbers the solve is restricted to.
+
+        Returns
+        -------
+        str
+            Comma-separated source names.
+        """
+        obs = self._obs
+        if not scans or obs.metadata is None:
+            return obs.calibrator_field
+        wanted = {int(scan) for scan in scans}
+        names = [s.source for s in obs.metadata.scans if s.scan_number in wanted and s.source]
+        return ",".join(dict.fromkeys(names)) or obs.calibrator_field
+
+    def _fair_scan_sample(self, sources: list[str]) -> list[int]:
+        """Return scan numbers spread evenly *within every source*, for the role-ranking survey.
+
+        The ordinary survey sampler spreads its budget over the observation as a
+        whole, which can drop a fringe finder's two scans entirely — and a source
+        with no row in the survey looks undetected, which is exactly the wrong
+        conclusion to draw about the brightest source of the run. Each source
+        therefore gets its own even sample.
+
+        Parameters
+        ----------
+        sources : list of str
+            Sources to sample (every observed source).
+
+        Returns
+        -------
+        list of int
+            Scan numbers, sorted; empty when the metadata has no scan.
+        """
+        obs = self._obs
+        budget = int(obs.config.get("calibration", {}).get("snr_max_scans", 24) or 24)
+        per_source = max(2, budget // max(1, len(sources)))
+        sampled: list[int] = []
+        for name in sources:
+            scans = [s.scan_number for s in obs.metadata.scans if s.source == name]
+            if len(scans) <= per_source:
+                sampled.extend(scans)
+                continue
+            step = len(scans) / float(per_source)
+            sampled.extend(scans[min(len(scans) - 1, int(index * step))] for index in range(per_source))
+        return sorted(dict.fromkeys(sampled))
 
     def _calibration_source_groups(self) -> list[list[str]]:
         """Source names to survey for the instrumental solve, best group first.
@@ -514,7 +772,7 @@ class CalibrateNamespace(Namespace):
             except Exception as exc:  # noqa: BLE001 - reporting must not prevent calibration
                 warnings.warn(f"{self._code}: SBD stage {stage_index} data plot failed ({exc})")
         table = self._backend.calibrate.initial_calibration(
-            self._code, obs.calibrator_field, ",".join(antennas or []) or obs.refant,
+            self._code, self._field_for_scans(scans), ",".join(antennas or []) or obs.refant,
             scans=scans, stages=stages, gaintable=list(obs.gaintables), metadata=obs.metadata,
             suffix=suffix, callib=cal_cfg.get("callib", False), **settings)
         obs.add_gaintable(table, step)
@@ -534,7 +792,7 @@ class CalibrateNamespace(Namespace):
         bp_cfg = dict(cal_cfg.get("bandpass", {}))
         try:
             table = self._backend.calibrate.bandpass(
-                self._code, obs.calibrator_field, ",".join(antennas or []) or obs.refant,
+                self._code, self._field_for_scans(scans), ",".join(antennas or []) or obs.refant,
                 scans=scans, gaintable=list(obs.gaintables), metadata=obs.metadata,
                 callib=cal_cfg.get("callib", False), **bp_cfg)
         except BackendError as exc:
@@ -781,11 +1039,50 @@ class CalibrateNamespace(Namespace):
         if phase_cals:
             table.gainfield = ",".join(s.name for s in phase_cals)
             logger.info("fringefit: solutions will be applied from {}", table.gainfield)
-        obs.add_gaintable(table, step)
         if plot:
             obs.plot.caltable(table)
+        applied = self._smooth_fringe_table(table)
+        obs.add_gaintable(applied, step)
+        if plot and applied.path != table.path:
+            obs.plot.caltable(applied)
         obs._state.mark_complete(step, outputs=[suffix])
-        return table
+        return applied
+
+    def _smooth_fringe_table(self, table: CalTable) -> CalTable:
+        """Smooth a fringe table in time and return the table to apply.
+
+        The solved table stays on disk and is plotted; it is the smoothed copy
+        that enters the apply chain, because a per-interval delay and rate carry
+        the noise of one interval while the atmospheric residual they measure
+        drifts slowly — so the raw solutions transfer their own scatter onto the
+        target. Configured by ``[calibration.mbd_smooth]``, whose keys go straight
+        to the backend; ``window = 0`` applies the solved table instead.
+
+        A backend that cannot smooth, or a failure part-way, leaves the solved
+        table in the chain rather than aborting the run: an unsmoothed fringe
+        solution is correct, just noisier.
+
+        Parameters
+        ----------
+        table : CalTable
+            The freshly solved fringe table.
+
+        Returns
+        -------
+        CalTable
+            The table to apply (the smoothed copy, or ``table`` itself).
+        """
+        obs = self._obs
+        settings = dict(obs.config.get("calibration", {}).get("mbd_smooth", {}))
+        if not self._backend.supports("calibrate", "smooth_fringe"):
+            return table
+        try:
+            return self._backend.calibrate.smooth_fringe(self._code, table, metadata=obs.metadata,
+                                                         **settings)
+        except Exception as exc:  # noqa: BLE001 - the unsmoothed solution is still a valid one
+            warnings.warn(f"{self._code}: could not smooth the {table.cal_type} solutions in time "
+                          f"({exc}); applying them unsmoothed")
+            return table
 
     def scan_snr(self, *, field: str = "", force: bool = False, **kwargs):
         """Measure fringe SNR per scan, antenna and polarization on the calibrators.
@@ -815,6 +1112,9 @@ class CalibrateNamespace(Namespace):
         if cached is not None and not force:
             logger.info("scan_snr: reusing the survey of {}", selection)
             return cached
+        wider = self._wider_survey(selection) if not force else None
+        if wider is not None:
+            return wider
         survey_cfg = {"channel_fraction": cal_cfg.get("snr_channel_fraction", 0.8),
                       "max_scans": cal_cfg.get("snr_max_scans", 24),
                       "callib": cal_cfg.get("callib", False)}
@@ -834,6 +1134,51 @@ class CalibrateNamespace(Namespace):
             warnings.warn(f"{self._code}: antenna {antenna} shows no usable fringes on {selection}")
         obs._state.mark_complete("scan_snr", outputs=["snr"])
         return survey
+
+    def _wider_survey(self, selection: str):
+        """Return a cached survey restricted to ``selection``, or None when none covers it.
+
+        Role inference surveys every source; the instrumental selection then asks
+        for one group of them. The wider survey already holds those rows, so it is
+        sliced rather than solved again — one fringe fit per scan is the dominant
+        cost of inspection.
+
+        Parameters
+        ----------
+        selection : str
+            Comma-separated source names being asked for.
+
+        A wider survey only substitutes when it holds *every* scan the requested
+        sources have: the role-ranking survey is sampled per source, and a thin
+        sample of a phase calibrator's 31 scans is not the basis the instrumental
+        selection should be planned on.
+
+        Returns
+        -------
+        ScanSNRSurvey or None
+        """
+        obs = self._obs
+        wanted = {name for name in selection.split(",") if name}
+        if not wanted or obs.metadata is None:
+            return None
+        expected = {s.scan_number for s in obs.metadata.scans if s.source in wanted}
+        if not expected:
+            return None
+        for cached_selection, survey in obs._snr_surveys.items():
+            have = {name for name in cached_selection.split(",") if name}
+            if not wanted <= have:
+                continue
+            restricted = survey.restricted_to(wanted)
+            if not expected <= set(restricted.scan_numbers):
+                logger.info("scan_snr: the survey of {} covers only {} of the {} scan(s) on {}; "
+                            "solving this group on its own", cached_selection,
+                            len(restricted.scan_numbers), len(expected), selection)
+                continue
+            logger.info("scan_snr: taking {} from the wider survey of {} ({} scan(s)); not "
+                        "fringe-fitting again", selection, cached_selection, len(restricted.scan_numbers))
+            obs._snr_surveys[selection] = restricted
+            return restricted
+        return None
 
     def apply(self, *, force: bool = False, field: str = "") -> None:
         """Apply the accumulated calibration tables to every source (or one ``field``)."""
@@ -1002,7 +1347,8 @@ class FlagNamespace(Namespace):
         # The edge trim is one number per antenna; what the bandpass could not solve (or had to
         # boost several-fold) in a particular subband is flagged where it is.
         if table is not None and self._backend.supports("flag", "bandpass_gaps"):
-            gaps = self._backend.flag.bandpass_gaps(self._code, table, min_gain=float(cfg.get("bandpass_min_gain", 0.5)))
+            gaps = self._backend.flag.bandpass_gaps(self._code, table,
+                                                    min_gain=float(cfg.get("bandpass_min_gain", 0.5)))
             measurement["bandpass_gaps"] = {k: v for k, v in gaps.items() if k != "commands"}
         if plot and measurement["method"] == "measured":
             obs.plot.bandpass_profile(measurement)
@@ -1251,8 +1597,9 @@ class PlotNamespace(Namespace):
         SNR (tplot), per-scan autocorrelation and cross-correlation spectra on
         the fringe finders (raw only), amplitude/phase vs frequency and vs time
         on baselines to the reference antenna, per-baseline corner plots,
-        amplitude/phase vs uv distance, and the uv coverage (raw only; it does
-        not change).
+        amplitude/phase vs uv distance, the uv coverage (raw only; it does
+        not change) and the time evolution of every baseline to the reference
+        antenna over the whole observation (raw only, :meth:`time_evolution`).
 
         Plotting is reporting: a plot that fails is logged as a warning and the
         rest of the set (and the pipeline) carries on.
@@ -1270,6 +1617,9 @@ class PlotNamespace(Namespace):
         label = label or ("raw" if column == "data" else "calibrated")
         if column == "data" and label == "raw" and not obs._state.should_run("plot_raw", force=force):
             self._obs.calibrate.scan_snr()     # the survey still drives the calibration selection
+            # A project whose raw set was drawn before the time-evolution figures existed gets them now.
+            if self._lacks_time_evolution():
+                self._run_jobs([("time_evolution", lambda: self.time_evolution(column=column, label=label))], label)
             return sorted(str(p) for p in self._backend.plot.plot_dir("raw").glob("*.png"))
         calibrators = obs.sources.calibrators or obs.sources.targets
         # Raw diagnostics trigger the calibrator-only survey used for calibration
@@ -1281,6 +1631,8 @@ class PlotNamespace(Namespace):
             jobs += [("scan_diagnostics", lambda: self.scan_diagnostics(column=column, label=label))]
             if self._backend.supports("plot", "diagnostic"):
                 jobs += [("uv_coverage", lambda: [self.uv_coverage()])]
+            if self._backend.supports("plot", "time_evolution"):
+                jobs += [("time_evolution", lambda: self.time_evolution(column=column, label=label))]
         jobs += [(f"spectrum[{s.name}]", lambda source=s: self.spectrum(
                     field=source.name, column=column, label=f"{label}_{source.name}"))
                  for s in calibrators]
@@ -1302,12 +1654,12 @@ class PlotNamespace(Namespace):
     def final_data(self) -> list[str]:
         """The final-data set on the calibrated column: every source, labelled ``final``.
 
-        uv coverage of all sources in one figure, amplitude/phase vs uv distance
-        with the model overlaid (when a MODEL column exists), spectra and
-        per-baseline light curves for every source, and the total coherent
-        amplitude light curve. Failing plots warn and the set carries on.
+        uv coverage of all sources in one figure plus a single-panel copy per
+        source, amplitude/phase vs uv distance with the model overlaid (when a
+        MODEL column exists), spectra and per-baseline light curves for every
+        source, and the total coherent amplitude light curve. Failing plots warn
+        and the set carries on.
         """
-        obs = self._obs
         names = self._all_source_names()
         jobs = []
         if self._backend.supports("plot", "diagnostic"):
@@ -1550,6 +1902,92 @@ class PlotNamespace(Namespace):
             refant=(refant or str(obs.refant)).split(",")[0], column=column, label=label,
             metadata=obs.metadata, **kwargs)
 
+    def time_evolution(self, *, column: str = "data", label: str = "raw") -> list[str]:
+        """Amplitude and phase vs time over the whole observation, per baseline to a reference antenna.
+
+        One figure per (reference antenna, subband) pair of :func:`~vlbipy.selection.plan_time_evolution`:
+        normally a single one, on the observation's reference antenna in a subband every antenna
+        recorded, coloured by source and vector-averaged over the central channels of the subband.
+        The data of that first figure then tells where the reference antenna has no unflagged data or
+        no fringes (:func:`~vlbipy.selection.reference_antenna_gaps`), which the metadata cannot; when
+        it does, the plan is made again with that knowledge and further reference antennas are added,
+        highest fringe SNR first. A figure that fails warns and the rest carries on.
+
+        Returns
+        -------
+        list of str
+            Paths of the PNG files written, ``<code>.<label>.time_evolution.ref<ANT>.spw<N>.png``.
+        """
+        from ..selection import plan_time_evolution, reference_antenna_gaps
+        obs = self._obs
+        metadata = obs.metadata
+        if metadata is None:
+            return []
+        refant = str(obs.refant).split(",")[0]
+        plan = plan_time_evolution(metadata, metadata.snr_survey, refant)
+        read: dict[tuple[str, int], dict] = {}
+        if plan and self._backend.supports("data", "read_time_evolution"):
+            first = (plan[0]["refant"], plan[0]["subband"])
+            read[first] = self._backend.data.read_time_evolution(self._code, refant=first[0], subband=first[1],
+                                                                 column=column, metadata=metadata)
+            gaps = reference_antenna_gaps(read[first], metadata)
+            if gaps["no_data"] or gaps["no_fringes"]:
+                plan = plan_time_evolution(metadata, metadata.snr_survey, refant,
+                                           without_data={first[0]: gaps["no_data"]},
+                                           without_fringes={first[0]: gaps["no_fringes"]})
+        roles = {s.name: s.source_type.value for s in obs.sources}
+        jobs = [(f"time_evolution[{entry['refant']},spw{entry['subband']}]",
+                 lambda e=entry: self._time_evolution_figure(e, read.get((e["refant"], e["subband"])), column,
+                                                             label, roles))
+                for entry in plan]
+        written = self._run_jobs(jobs, label)
+        logger.info("plot.time_evolution: {} figure(s) of {} planned ({})", len(written), len(plan),
+                    "; ".join(f"ref {e['refant']} subband {e['subband']}: {e['reason']}" for e in plan) or "none")
+        return written
+
+    def _time_evolution_figure(self, entry: dict, series: Optional[dict], column: str, label: str,
+                               roles: dict) -> list[str]:
+        """Make one planned time-evolution figure.
+
+        Parameters
+        ----------
+        entry : dict
+            One item of the plan (``refant``, ``subband``, ``reason``, ``covers``).
+        series : dict or None
+            Its data when already read; otherwise it is read here (backends that can).
+        column, label : str
+            Data column and file-name label.
+        roles : dict
+            ``{source: role}`` for the legend.
+
+        Returns
+        -------
+        list of str
+            The PNG path; empty when a reference antenna added to cover some scans turns out to have no
+            unflagged data in any of them (its figure would show nothing the first one does not).
+        """
+        metadata = self._obs.metadata
+        if series is None and self._backend.supports("data", "read_time_evolution"):
+            series = self._backend.data.read_time_evolution(self._code, refant=entry["refant"],
+                                                            subband=entry["subband"], column=column,
+                                                            metadata=metadata)
+        if series is not None and entry["covers"] and not set(entry["covers"]) & set(series["scans_with_data"]):
+            logger.info("plot.time_evolution: {} has no unflagged data in the scans it was added for; no figure",
+                        entry["refant"])
+            return []
+        return [self._backend.plot.time_evolution(self._code, refant=entry["refant"], subband=entry["subband"],
+                                                  column=column, label=label, series=series, metadata=metadata,
+                                                  source_roles=roles, reason=entry["reason"])]
+
+    def _lacks_time_evolution(self) -> bool:
+        """True when the raw time-evolution figures can be made (data on disk) and none exists yet."""
+        backend = self._backend
+        if not backend.supports("plot", "time_evolution") or not backend.supports("data", "is_imported"):
+            return False
+        if not backend.data.is_imported(self._code):
+            return False
+        return not any(backend.plot.plot_dir("raw").glob("*.time_evolution.*.png"))
+
     def corner(self, *, field: str = "", quantity: str = "phase", column: str = "corrected",
                label: str = "", **kwargs) -> str:
         """Per-baseline time x frequency grid for one field, coloured by phase or amplitude.
@@ -1579,8 +2017,13 @@ class PlotNamespace(Namespace):
         return self._backend.plot.bandpass_profile(self._code, measurement)
 
     def caltable(self, table: CalTable) -> list[str]:
-        """Plot one calibration table to PNG(s): Tsys/gain-curve/fringe/gain layouts."""
-        return self._backend.plot.caltable(self._code, table.path, cal_type=table.cal_type)
+        """Plot one calibration table to PNG(s): Tsys/gain-curve/fringe/gain layouts.
+
+        The observation's metadata goes along (cached, so it works without the measurement set): it
+        gives the bandpass its frequency axis and the gain curves the elevations each antenna observed at.
+        """
+        return self._backend.plot.caltable(self._code, table.path, cal_type=table.cal_type,
+                                           metadata=self._obs.metadata)
 
     def caltables(self) -> list[str]:
         """Plot every calibration table produced so far.
@@ -1592,13 +2035,23 @@ class PlotNamespace(Namespace):
         if not tables:
             caldir = Path(self._obs.work_dir) / "caltables"
             tables = [CalTable(cal_type=p.suffix.lstrip("."), path=str(p))
-                      for p in sorted(caldir.glob("*")) if p.is_dir()]
+                      for p in sorted(caldir.glob("*")) if self._is_caltable(p)]
             if tables:
                 logger.info("plot.caltables: found {} caltable(s) on disk", len(tables))
         paths: list[str] = []
         for table in tables:
             paths.extend(self.caltable(table))
         return paths
+
+    @staticmethod
+    def _is_caltable(path: Path) -> bool:
+        """True for a directory holding a calibration table (its ``table.info`` says ``Type = Calibration``).
+
+        ``caltables/`` also holds things that cannot be plotted as one: the copy of the GAIN_CURVE subtable
+        saved before a gain-curve refit (``<code>.gain_curve.original``) and JSON records.
+        """
+        info = path / "table.info"
+        return path.is_dir() and info.is_file() and "Type = Calibration" in info.read_text(errors="replace")
 
 
 class CleanNamespace(Namespace):

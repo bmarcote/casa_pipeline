@@ -115,5 +115,49 @@ def test_backend_flags_the_late_antenna_and_transfers_its_arrival_time():
     assert all("antenna='A3'" in c for c in report["commands"])
     # on the target: from the scan start for the 6 s of the slew plus one integration to settle
     first, last = re.search(r"timerange='([^~]+)~([^']+)'", report["commands"][report["n_direct"]]).groups()
-    seconds = lambda text: sum(float(x) * m for x, m in zip(text.split("/")[-1].split(":"), (3600, 60, 1)))   # noqa: E731
-    assert abs((seconds(last) - seconds(first)) % 86400 - 8.0) < 0.01
+    clock = [[float(x) for x in text.split("/")[-1].split(":")] for text in (first, last)]
+    seconds = [3600 * hours + 60 * minutes + sec for hours, minutes, sec in clock]
+    assert abs((seconds[1] - seconds[0]) % 86400 - 8.0) < 0.01
+
+
+def test_an_antenna_far_below_its_own_best_scan_is_weak_in_that_scan_only():
+    """EM163 scan 103: CM detected, but at a few per cent of its amplitude in the other scans."""
+    from vlbipy.statistics import weak_scans_per_antenna
+    amplitude, scans = make_track(n_scans=3, per_scan=30)
+    amplitude[:, :, scans == 3] *= 0.8                               # the whole array a little lower: not weak
+    put_off_source(amplitude, 5, np.flatnonzero(scans == 2), factor=0.06)
+    result = weak_scans_per_antenna(amplitude, scans)
+    assert result["scans"].tolist() == [1, 2, 3]
+    assert np.argwhere(result["weak"]).tolist() == [[5, 1]]
+    assert result["gains"][5, 1] < 0.2 and result["gains"][5, 0] > 0.9
+    others = np.delete(result["gains"], 5, axis=0)
+    assert others.min() > 0.7
+
+
+def test_weak_scans_need_a_second_scan_and_ignore_absent_antennas():
+    from vlbipy.statistics import weak_scans_per_antenna
+    amplitude, scans = make_track(n_scans=1, per_scan=30)
+    put_off_source(amplitude, 5, np.arange(30), factor=0.06)
+    assert not weak_scans_per_antenna(amplitude, scans)["weak"].any()      # nothing to compare with
+    amplitude, scans = make_track(n_scans=3, per_scan=30)
+    amplitude[4, :, :][:, scans == 1] = np.nan                             # antenna 4 was not there in scan 1
+    amplitude[:, 4, :][:, scans == 1] = np.nan
+    assert not weak_scans_per_antenna(amplitude, scans)["weak"].any()
+
+
+def test_delay_peak_amplitude_sees_the_fringe_a_channel_average_cancels():
+    from vlbipy.backends.casa import _delay_peak_amplitude
+    rng = np.random.default_rng(3)
+    n_channel, n_row = 64, 200
+    delay = rng.uniform(-0.4, 0.4, n_row)                                   # turns per channel
+    phase = 2.0 * np.pi * delay[None, None, :] * np.arange(n_channel)[None, :, None]
+    fringe = 2.0 * np.exp(1j * phase) * np.ones((2, 1, 1))
+    noise = rng.normal(size=(2, n_channel, n_row)) + 1j * rng.normal(size=(2, n_channel, n_row))
+    good = np.ones((2, n_channel, n_row), dtype=bool)
+    good[:, :6] = False
+    good[1, :, :50] = False                                                  # one hand flagged in some rows
+    amplitude = _delay_peak_amplitude(fringe + noise, good, block=64)
+    assert amplitude.shape == (n_row,) and abs(np.median(amplitude) - 2.0) < 0.1
+    assert np.median(_delay_peak_amplitude(noise, good)) < 0.6                # the noise floor
+    good[:, :, 0] = False
+    assert _delay_peak_amplitude(fringe + noise, good)[0] == 0.0             # nothing unflagged in that row

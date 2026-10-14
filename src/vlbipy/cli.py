@@ -273,6 +273,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the interactive Jupyter notebook (<work_dir>/<code>.ipynb) describing the reduction so far"
     )
     p_nb.add_argument("--open", action="store_true", help="Launch JupyterLab on the notebook")
+    p_nb.add_argument("--link", action="store_true",
+                      help="Link the plots by relative path instead of embedding them: a small notebook that has "
+                           "to stay in the work directory")
 
     parser.epilog = _options_epilog(sub, common)
     return parser
@@ -580,12 +583,12 @@ def _cmd_combine(obs: VLBIObs, args: argparse.Namespace) -> int:
 
 
 def _cmd_notebook(obs: VLBIObs, args: argparse.Namespace) -> int:
-    """Write the reduction notebook(s); optionally open JupyterLab on the first."""
+    """Write the reduction notebook(s), plots embedded unless ``--link``; optionally open JupyterLab on the first."""
     try:
         obs.import_data(force=False)
     except Exception as exc:  # noqa: BLE001 - cached metadata is enough for the notebook
         logger.warning("notebook: could not reload the data ({}); using the cached metadata", exc)
-    paths = [p for p in obs.notebook() if p]
+    paths = [p for p in obs.notebook(embed=not args.link) if p]
     for path in paths:
         print(path)
     if args.open and paths:
