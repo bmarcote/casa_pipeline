@@ -202,6 +202,10 @@ sources = "all"              # "all" (targets + calibrators) | "targets"
 produce_fits = true
 produce_png = true
 
+[plotting]
+engine = "auto"              # standard plots (spectra, time series, time evolution): "jplotter" (jiveplot,
+                             # fast), "matplotlib", or "auto" = jplotter when jiveplot is installed
+
 [export]
 split_per_source = true
 export_uvfits = true
